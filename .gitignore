@@ -1,0 +1,33 @@
+# Environment variables
+.env
+   
+# Virtual environment
+venv/
+   
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+   
+# IDE
+.vscode/
+.idea/
+   
+# AWS
+.aws/
+   
+# OS files
+.DS_Store
+   
+# Logs
+*.log
+   
+# Zip files (Lambda deployments)
+*.zip
+
+# Build artifacts
+build/
+
+# OAuth tokens (sensitive)
+config/outlook_token.json

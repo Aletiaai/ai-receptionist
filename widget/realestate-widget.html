@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+   <html lang="en">
+   <head>
+       <meta charset="UTF-8">
+       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+       <title>Real Estate - Virtual Assistant</title>
+       <style>
+           * {
+               margin: 0;
+               padding: 0;
+               box-sizing: border-box;
+           }
+
+           body {
+               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+               background: transparent;
+               min-height: 100vh;
+               display: flex;
+               justify-content: center;
+               align-items: center;
+               padding: 10px;
+           }
+
+           .chat-container {
+               width: 100%;
+               max-width: 400px;
+               height: 550px;
+               background: #ffffff;
+               border-radius: 16px;
+               box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+               display: flex;
+               flex-direction: column;
+               overflow: hidden;
+           }
+
+           .chat-header {
+               background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+               color: white;
+               padding: 18px 20px;
+               display: flex;
+               align-items: center;
+               gap: 12px;
+           }
+
+           .chat-header-avatar {
+               width: 42px;
+               height: 42px;
+               background: rgba(255, 255, 255, 0.2);
+               border-radius: 50%;
+               display: flex;
+               align-items: center;
+               justify-content: center;
+               font-size: 22px;
+           }
+
+           .chat-header-info h1 {
+               font-size: 16px;
+               font-weight: 600;
+               margin-bottom: 2px;
+           }
+
+           .chat-header-info p {
+               font-size: 11px;
+               opacity: 0.9;
+           }
+
+           .status-badge {
+               display: inline-flex;
+               align-items: center;
+               gap: 5px;
+               padding: 4px 10px;
+               background: rgba(255, 255, 255, 0.2);
+               border-radius: 12px;
+               font-size: 10px;
+               margin-left: auto;
+           }
+
+           .status-dot {
+               width: 7px;
+               height: 7px;
+               background: #ffffff;
+               border-radius: 50%;
+               animation: pulse 2s infinite;
+           }
+
+           @keyframes pulse {
+               0%, 100% { opacity: 1; }
+               50% { opacity: 0.5; }
+           }
+
+           .chat-messages {
+               flex: 1;
+               overflow-y: auto;
+               padding: 16px;
+               display: flex;
+               flex-direction: column;
+               gap: 10px;
+               background: #f8fafc;
+           }
+
+           .message {
+               max-width: 85%;
+               padding: 11px 15px;
+               border-radius: 14px;
+               line-height: 1.5;
+               font-size: 13px;
+               animation: fadeIn 0.3s ease;
+           }
+
+           @keyframes fadeIn {
+               from { opacity: 0; transform: translateY(10px); }
+               to { opacity: 1; transform: translateY(0); }
+           }
+
+           .message-user {
+               background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+               color: white;
+               align-self: flex-end;
+               border-bottom-right-radius: 4px;
+           }
+
+           .message-assistant {
+               background: white;
+               color: #1e293b;
+               align-self: flex-start;
+               border-bottom-left-radius: 4px;
+               box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+           }
+
+           .typing-dots {
+               display: flex;
+               gap: 4px;
+               padding: 4px 0;
+           }
+
+           .typing-dots span {
+               width: 7px;
+               height: 7px;
+               background: #94a3b8;
+               border-radius: 50%;
+               animation: typing 1.4s infinite ease-in-out;
+           }
+
+           .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+           .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+           @keyframes typing {
+               0%, 60%, 100% { transform: translateY(0); }
+               30% { transform: translateY(-6px); }
+           }
+
+           .chat-input-container {
+               padding: 14px;
+               background: white;
+               border-top: 1px solid #e2e8f0;
+               display: flex;
+               gap: 10px;
+           }
+
+           .chat-input {
+               flex: 1;
+               padding: 11px 15px;
+               border: 1px solid #e2e8f0;
+               border-radius: 22px;
+               font-size: 13px;
+               outline: none;
+               transition: border-color 0.2s, box-shadow 0.2s;
+           }
+
+           .chat-input:focus {
+               border-color: #059669;
+               box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+           }
+
+           .chat-input:disabled {
+               background: #f1f5f9;
+           }
+
+           .chat-send-btn {
+               width: 42px;
+               height: 42px;
+               border: none;
+               border-radius: 50%;
+               background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+               color: white;
+               cursor: pointer;
+               display: flex;
+               align-items: center;
+               justify-content: center;
+               transition: transform 0.2s, box-shadow 0.2s;
+           }
+
+           .chat-send-btn:hover:not(:disabled) {
+               transform: scale(1.05);
+               box-shadow: 0 4px 12px rgba(5, 150, 105, 0.4);
+           }
+
+           .chat-send-btn:disabled {
+               opacity: 0.5;
+               cursor: not-allowed;
+           }
+
+           .chat-send-btn svg {
+               width: 18px;
+               height: 18px;
+           }
+
+           .booking-confirmed {
+               background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+               color: white !important;
+           }
+       </style>
+   </head>
+   <body>
+       <div class="chat-container">
+           <div class="chat-header">
+               <div class="chat-header-avatar">🏠</div>
+               <div class="chat-header-info">
+                   <h1>Real Estate Agency</h1>
+                   <p>Virtual Assistant</p>
+               </div>
+               <div class="status-badge">
+                   <span class="status-dot"></span>
+                   Online
+               </div>
+           </div>
+
+           <div class="chat-messages" id="chat-messages">
+               <div class="message message-assistant">
+                   Hello! 👋 Welcome to our Real Estate Agency. I'm your virtual assistant. Would you like to schedule a property viewing or speak with one of our agents?
+                   <br><br>
+                   ¡Hola! Bienvenido. ¿Le gustaría programar una visita a una propiedad?
+               </div>
+           </div>
+
+           <div class="chat-input-container">
+               <input 
+                   type="text" 
+                   class="chat-input" 
+                   id="chat-input" 
+                   placeholder="Type your message... / Escriba su mensaje..."
+                   onkeypress="handleKeyPress(event)"
+               >
+               <button class="chat-send-btn" id="send-btn" onclick="sendMessage()">
+                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                       <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2"/>
+                   </svg>
+               </button>
+           </div>
+       </div>
+
+       <script>
+           const API_BASE_URL = 'https://x33x9hc3td.execute-api.us-east-2.amazonaws.com';
+           const TENANT_ID = 'realestate';
+           
+           let sessionId = null;
+           let isLoading = false;
+
+           function addMessage(content, role) {
+               const container = document.getElementById('chat-messages');
+               const div = document.createElement('div');
+               div.className = `message message-${role}`;
+               div.innerHTML = content.replace(/\n/g, '<br>');
+               container.appendChild(div);
+               container.scrollTop = container.scrollHeight;
+           }
+
+           function showTyping() {
+               const container = document.getElementById('chat-messages');
+               const div = document.createElement('div');
+               div.className = 'message message-assistant';
+               div.id = 'typing';
+               div.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+               container.appendChild(div);
+               container.scrollTop = container.scrollHeight;
+           }
+
+           function hideTyping() {
+               const el = document.getElementById('typing');
+               if (el) el.remove();
+           }
+
+           async function sendMessage() {
+               const input = document.getElementById('chat-input');
+               const message = input.value.trim();
+               if (!message || isLoading) return;
+
+               input.value = '';
+               addMessage(message, 'user');
+
+               isLoading = true;
+               input.disabled = true;
+               document.getElementById('send-btn').disabled = true;
+               showTyping();
+
+               try {
+                   const response = await fetch(`${API_BASE_URL}/chat/${TENANT_ID}`, {
+                       method: 'POST',
+                       headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify({ message, session_id: sessionId })
+                   });
+
+                   const data = await response.json();
+                   hideTyping();
+
+                   if (response.ok) {
+                       sessionId = data.session_id;
+                       addMessage(data.message, 'assistant');
+                       
+                       if (data.booking?.confirmed) {
+                           document.querySelector('.message-assistant:last-child')?.classList.add('booking-confirmed');
+                       }
+                   } else {
+                       addMessage('Sorry, an error occurred. Please try again.', 'assistant');
+                   }
+               } catch (error) {
+                   hideTyping();
+                   addMessage('Sorry, I couldn\'t connect to the server. Please try again.', 'assistant');
+               } finally {
+                   isLoading = false;
+                   input.disabled = false;
+                   document.getElementById('send-btn').disabled = false;
+                   input.focus();
+               }
+           }
+
+           function handleKeyPress(e) {
+               if (e.key === 'Enter') sendMessage();
+           }
+       </script>
+   </body>
+   </html>

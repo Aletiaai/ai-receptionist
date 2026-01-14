@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+   <html lang="en">
+   <head>
+       <meta charset="UTF-8">
+       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+       <title>AI Receptionist Chat</title>
+       <style>
+           * {
+               margin: 0;
+               padding: 0;
+               box-sizing: border-box;
+           }
+
+           body {
+               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               min-height: 100vh;
+               display: flex;
+               justify-content: center;
+               align-items: center;
+               padding: 20px;
+           }
+
+           .chat-container {
+               width: 100%;
+               max-width: 450px;
+               height: 600px;
+               background: #ffffff;
+               border-radius: 16px;
+               box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+               display: flex;
+               flex-direction: column;
+               overflow: hidden;
+           }
+
+           .chat-header {
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               color: white;
+               padding: 20px;
+               display: flex;
+               align-items: center;
+               gap: 12px;
+           }
+
+           .chat-header-avatar {
+               width: 45px;
+               height: 45px;
+               background: rgba(255, 255, 255, 0.2);
+               border-radius: 50%;
+               display: flex;
+               align-items: center;
+               justify-content: center;
+               font-size: 24px;
+           }
+
+           .chat-header-info h1 {
+               font-size: 18px;
+               font-weight: 600;
+               margin-bottom: 2px;
+           }
+
+           .chat-header-info p {
+               font-size: 12px;
+               opacity: 0.9;
+           }
+
+           .chat-messages {
+               flex: 1;
+               overflow-y: auto;
+               padding: 20px;
+               display: flex;
+               flex-direction: column;
+               gap: 12px;
+               background: #f8fafc;
+           }
+
+           .message {
+               max-width: 85%;
+               padding: 12px 16px;
+               border-radius: 16px;
+               line-height: 1.5;
+               font-size: 14px;
+               animation: fadeIn 0.3s ease;
+           }
+
+           @keyframes fadeIn {
+               from {
+                   opacity: 0;
+                   transform: translateY(10px);
+               }
+               to {
+                   opacity: 1;
+                   transform: translateY(0);
+               }
+           }
+
+           .message-user {
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               color: white;
+               align-self: flex-end;
+               border-bottom-right-radius: 4px;
+           }
+
+           .message-assistant {
+               background: white;
+               color: #1e293b;
+               align-self: flex-start;
+               border-bottom-left-radius: 4px;
+               box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+           }
+
+           .message-typing {
+               background: white;
+               color: #64748b;
+               align-self: flex-start;
+               border-bottom-left-radius: 4px;
+               box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+           }
+
+           .typing-dots {
+               display: flex;
+               gap: 4px;
+               padding: 4px 0;
+           }
+
+           .typing-dots span {
+               width: 8px;
+               height: 8px;
+               background: #94a3b8;
+               border-radius: 50%;
+               animation: typing 1.4s infinite ease-in-out;
+           }
+
+           .typing-dots span:nth-child(2) {
+               animation-delay: 0.2s;
+           }
+
+           .typing-dots span:nth-child(3) {
+               animation-delay: 0.4s;
+           }
+
+           @keyframes typing {
+               0%, 60%, 100% {
+                   transform: translateY(0);
+               }
+               30% {
+                   transform: translateY(-8px);
+               }
+           }
+
+           .chat-input-container {
+               padding: 16px;
+               background: white;
+               border-top: 1px solid #e2e8f0;
+               display: flex;
+               gap: 12px;
+           }
+
+           .chat-input {
+               flex: 1;
+               padding: 12px 16px;
+               border: 1px solid #e2e8f0;
+               border-radius: 24px;
+               font-size: 14px;
+               outline: none;
+               transition: border-color 0.2s, box-shadow 0.2s;
+           }
+
+           .chat-input:focus {
+               border-color: #667eea;
+               box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+           }
+
+           .chat-input:disabled {
+               background: #f1f5f9;
+               cursor: not-allowed;
+           }
+
+           .chat-send-btn {
+               width: 45px;
+               height: 45px;
+               border: none;
+               border-radius: 50%;
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               color: white;
+               cursor: pointer;
+               display: flex;
+               align-items: center;
+               justify-content: center;
+               transition: transform 0.2s, box-shadow 0.2s;
+           }
+
+           .chat-send-btn:hover:not(:disabled) {
+               transform: scale(1.05);
+               box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+           }
+
+           .chat-send-btn:disabled {
+               opacity: 0.5;
+               cursor: not-allowed;
+           }
+
+           .chat-send-btn svg {
+               width: 20px;
+               height: 20px;
+           }
+
+           /* Tenant selector */
+           .tenant-selector {
+               padding: 16px;
+               background: white;
+               border-bottom: 1px solid #e2e8f0;
+               display: flex;
+               gap: 8px;
+           }
+
+           .tenant-btn {
+               flex: 1;
+               padding: 10px 16px;
+               border: 2px solid #e2e8f0;
+               border-radius: 8px;
+               background: white;
+               font-size: 13px;
+               font-weight: 500;
+               cursor: pointer;
+               transition: all 0.2s;
+           }
+
+           .tenant-btn:hover {
+               border-color: #667eea;
+           }
+
+           .tenant-btn.active {
+               border-color: #667eea;
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               color: white;
+           }
+
+           /* Status badge */
+           .status-badge {
+               display: inline-flex;
+               align-items: center;
+               gap: 6px;
+               padding: 4px 10px;
+               background: rgba(255, 255, 255, 0.2);
+               border-radius: 12px;
+               font-size: 11px;
+               margin-left: auto;
+           }
+
+           .status-dot {
+               width: 8px;
+               height: 8px;
+               background: #4ade80;
+               border-radius: 50%;
+               animation: pulse 2s infinite;
+           }
+
+           @keyframes pulse {
+               0%, 100% {
+                   opacity: 1;
+               }
+               50% {
+                   opacity: 0.5;
+               }
+           }
+
+           /* Booking confirmation styling */
+           .booking-confirmed {
+               background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%) !important;
+               color: white !important;
+           }
+
+           /* Mobile responsive */
+           @media (max-width: 480px) {
+               body {
+                   padding: 0;
+               }
+
+               .chat-container {
+                   height: 100vh;
+                   max-width: 100%;
+                   border-radius: 0;
+               }
+           }
+       </style>
+   </head>
+   <body>
+       <div class="chat-container">
+           <!-- Header -->
+           <div class="chat-header">
+               <div class="chat-header-avatar">🤖</div>
+               <div class="chat-header-info">
+                   <h1>AI Receptionist</h1>
+                   <p id="tenant-name">Select a service below/Selecciona un servicio abajo</p>
+               </div>
+               <div class="status-badge">
+                   <span class="status-dot"></span>
+                   Online
+               </div>
+           </div>
+
+           <!-- Tenant Selector -->
+           <div class="tenant-selector">
+               <button class="tenant-btn" data-tenant="consulate" onclick="selectTenant('consulate')">
+                   🏛️ Consulate
+               </button>
+               <button class="tenant-btn" data-tenant="realestate" onclick="selectTenant('realestate')">
+                   🏠 Real Estate
+               </button>
+           </div>
+
+           <!-- Messages -->
+           <div class="chat-messages" id="chat-messages">
+               <div class="message message-assistant">
+                   👋 Welcome! Please select a service above to start./👋 Bienvanid@! Por favor selecciona un servicio arriba para empezar.
+               </div>
+           </div>
+
+           <!-- Input -->
+           <div class="chat-input-container">
+               <input 
+                   type="text" 
+                   class="chat-input" 
+                   id="chat-input" 
+                   placeholder="Type your message..."
+                   disabled
+                   onkeypress="handleKeyPress(event)"
+               >
+               <button class="chat-send-btn" id="send-btn" onclick="sendMessage()" disabled>
+                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                       <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2"/>
+                   </svg>
+               </button>
+           </div>
+       </div>
+
+       <script>
+           // ============================================
+           // CONFIGURATION - Update this for your deployment
+           // ============================================
+           const API_BASE_URL = 'https://x33x9hc3td.execute-api.us-east-2.amazonaws.com';
+           
+           // ============================================
+           // State
+           // ============================================
+           let currentTenant = null;
+           let sessionId = null;
+           let isLoading = false;
+
+           // ============================================
+           // Tenant Selection
+           // ============================================
+           function selectTenant(tenantId) {
+               // Update UI
+               document.querySelectorAll('.tenant-btn').forEach(btn => {
+                   btn.classList.remove('active');
+               });
+               document.querySelector(`[data-tenant="${tenantId}"]`).classList.add('active');
+
+               // Update state
+               currentTenant = tenantId;
+               sessionId = null; // Reset session for new tenant
+
+               // Update header
+               const tenantNames = {
+                   'consulate': '🏛️ Consulate Services',
+                   'realestate': '🏠 Real Estate Agency'
+               };
+               document.getElementById('tenant-name').textContent = tenantNames[tenantId];
+
+               // Enable input
+               document.getElementById('chat-input').disabled = false;
+               document.getElementById('send-btn').disabled = false;
+               document.getElementById('chat-input').placeholder = 'Type your message...';
+               document.getElementById('chat-input').focus();
+
+               // Clear messages and show welcome
+               const messagesContainer = document.getElementById('chat-messages');
+               messagesContainer.innerHTML = '';
+               
+               const welcomeMessages = {
+                   'consulate': '¡Bienvenido al Consulado! 👋 Soy su asistente virtual. ¿En qué puedo ayudarle hoy? Puedo ayudarle a programar una cita.\n\nWelcome to the Consulate! I\'m your virtual assistant. How can I help you today? I can help you schedule an appointment.',
+                   'realestate': 'Hello! 👋 Welcome to our Real Estate Agency. I\'m your virtual assistant. Would you like to schedule a property viewing or speak with one of our agents?\n\n¡Hola! Bienvenido a nuestra agencia. ¿Le gustaría programar una visita a una propiedad?'
+               };
+
+               addMessage(welcomeMessages[tenantId], 'assistant');
+           }
+
+           // ============================================
+           // Messaging
+           // ============================================
+           function addMessage(content, role) {
+               const messagesContainer = document.getElementById('chat-messages');
+               const messageDiv = document.createElement('div');
+               messageDiv.className = `message message-${role}`;
+               
+               // Handle line breaks
+               messageDiv.innerHTML = content.replace(/\n/g, '<br>');
+               
+               messagesContainer.appendChild(messageDiv);
+               messagesContainer.scrollTop = messagesContainer.scrollHeight;
+           }
+
+           function showTypingIndicator() {
+               const messagesContainer = document.getElementById('chat-messages');
+               const typingDiv = document.createElement('div');
+               typingDiv.className = 'message message-typing';
+               typingDiv.id = 'typing-indicator';
+               typingDiv.innerHTML = `
+                   <div class="typing-dots">
+                       <span></span>
+                       <span></span>
+                       <span></span>
+                   </div>
+               `;
+               messagesContainer.appendChild(typingDiv);
+               messagesContainer.scrollTop = messagesContainer.scrollHeight;
+           }
+
+           function hideTypingIndicator() {
+               const typingIndicator = document.getElementById('typing-indicator');
+               if (typingIndicator) {
+                   typingIndicator.remove();
+               }
+           }
+
+           async function sendMessage() {
+               const input = document.getElementById('chat-input');
+               const message = input.value.trim();
+
+               if (!message || !currentTenant || isLoading) return;
+
+               // Clear input and show user message
+               input.value = '';
+               addMessage(message, 'user');
+
+               // Show loading state
+               isLoading = true;
+               input.disabled = true;
+               document.getElementById('send-btn').disabled = true;
+               showTypingIndicator();
+
+               try {
+                   const response = await fetch(`${API_BASE_URL}/chat/${currentTenant}`, {
+                       method: 'POST',
+                       headers: {
+                           'Content-Type': 'application/json'
+                       },
+                       body: JSON.stringify({
+                           message: message,
+                           session_id: sessionId
+                       })
+                   });
+
+                   const data = await response.json();
+
+                   if (response.ok) {
+                       // Update session ID
+                       sessionId = data.session_id;
+
+                       // Hide typing and show response
+                       hideTypingIndicator();
+                       addMessage(data.message, 'assistant');
+
+                       // Check if booking was confirmed
+                       if (data.booking && data.booking.confirmed) {
+                           const lastMessage = document.querySelector('.message-assistant:last-child');
+                           if (lastMessage) {
+                               lastMessage.classList.add('booking-confirmed');
+                           }
+                       }
+                   } else {
+                       hideTypingIndicator();
+                       addMessage('Sorry, something went wrong. Please try again.', 'assistant');
+                       console.error('API Error:', data);
+                   }
+               } catch (error) {
+                   hideTypingIndicator();
+                   addMessage('Sorry, I couldn\'t connect to the server. Please check your connection and try again.', 'assistant');
+                   console.error('Network Error:', error);
+               } finally {
+                   // Re-enable input
+                   isLoading = false;
+                   input.disabled = false;
+                   document.getElementById('send-btn').disabled = false;
+                   input.focus();
+               }
+           }
+
+           function handleKeyPress(event) {
+               if (event.key === 'Enter' && !event.shiftKey) {
+                   event.preventDefault();
+                   sendMessage();
+               }
+           }
+
+           // ============================================
+           // Initialize
+           // ============================================
+           document.addEventListener('DOMContentLoaded', () => {
+               // Auto-select tenant if specified in URL
+               const urlParams = new URLSearchParams(window.location.search);
+               const tenantParam = urlParams.get('tenant');
+               
+               if (tenantParam && ['consulate', 'realestate'].includes(tenantParam)) {
+                   selectTenant(tenantParam);
+               }
+           });
+       </script>
+   </body>
+   </html>

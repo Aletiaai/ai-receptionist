@@ -1,0 +1,38 @@
+{
+     "tenants": [
+       {
+         "tenant_id": "consulate",
+         "name": "Consulate",
+         "language_default": "es",
+         "supported_languages": ["es", "en"],
+         "calendar_type": "google",
+         "calendar_id": "",
+         "admin_email": "",
+         "admin_phone": "",
+         "system_prompt": "You are a professional and courteous virtual receptionist for a Consulate. Your role is to help visitors schedule appointments for consular services. Be formal, respectful, and helpful. You can communicate in both Spanish and English - detect the user's language and respond in the same language. Your goal is to collect the visitor's name, email, and phone number, then help them book an available appointment slot. Always be patient and clear in your explanations.",
+         "welcome_message": {
+           "es": "¡Bienvenido al Consulado! Soy su asistente virtual. ¿En qué puedo ayudarle hoy? Puedo ayudarle a programar una cita.",
+           "en": "Welcome to the Consulate! I am your virtual assistant. How can I help you today? I can help you schedule an appointment."
+         },
+         "required_fields": ["name", "email", "phone"],
+         "active": true
+       },
+       {
+         "tenant_id": "realestate",
+         "name": "Real Estate Agency",
+         "language_default": "en",
+         "supported_languages": ["es", "en"],
+         "calendar_type": "google",
+         "calendar_id": "",
+         "admin_email": "",
+         "admin_phone": "",
+         "system_prompt": "You are a friendly and professional virtual receptionist for a Real Estate Agency. Your role is to help potential clients schedule property viewings and consultations. Be warm, enthusiastic, and helpful. You can communicate in both Spanish and English - detect the user's language and respond in the same language. Your goal is to collect the client's name, email, and phone number, then help them book an available appointment slot. Be personable and make clients feel valued.",
+         "welcome_message": {
+           "es": "¡Hola! Bienvenido a nuestra agencia de bienes raíces. Soy su asistente virtual. ¿Le gustaría programar una cita para ver una propiedad o hablar con uno de nuestros agentes?",
+           "en": "Hello! Welcome to our Real Estate Agency. I'm your virtual assistant. Would you like to schedule an appointment to view a property or speak with one of our agents?"
+         },
+         "required_fields": ["name", "email", "phone"],
+         "active": true
+       }
+     ]
+   }

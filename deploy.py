@@ -121,10 +121,10 @@ Lambda entry point.
 This file is the handler configured in AWS Lambda.
 """
 
-from src.handlers.chat_handler import lambda_handler
+from src.handlers.router import route_request
 
 # Re-export the handler
-handler = lambda_handler
+handler = route_request
 '''
     
     with open(os.path.join(PACKAGE_DIR, "lambda_function.py"), "w") as f:

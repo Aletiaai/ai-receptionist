@@ -202,16 +202,60 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
                 to_number = header.get("value")
         
         print(f"📞 Incoming call: {call_id}")
-        print(f"   From: {from_number}")
-        print(f"   To: {to_number}")
         
         # Determine tenant based on called number (for now, use default)
         tenant_id = DEFAULT_TENANT
+        tenant = TENANTS.get(tenant_id, TENANTS[DEFAULT_TENANT])
+
+        # Store call state
+        active_calls[call_id] = {
+            "tenant_id": tenant_id,
+            "from_number": from_number,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "user_data": {},
+            "available_slots": []
+        }
+
+        # FIX: Removed the 'turn_detection' block that caused the 400 error
+        accept_payload = {
+            "type": "realtime",
+            "model": "gpt-realtime-2025-08-28",
+            "audio": {
+                "output": { "voice": tenant["voice"] }
+            },
+            "instructions": tenant["instructions"],
+            "tools": TOOLS
+        }
+
+        async with httpx.AsyncClient() as client:
+            accept_url = f"{OPENAI_API_BASE}/realtime/calls/{call_id}/accept"
+            response = await client.post(
+                accept_url,
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json=accept_payload,
+                timeout=30.0
+            )
+            
+            if response.status_code != 200:
+                print(f"❌ Failed to accept call: {response.status_code} - {response.text}")
+                if call_id in active_calls:
+                    del active_calls[call_id]
+                return JSONResponse(status_code=500, content={"status": "error"})
+
+        print(f"✅ Call accepted: {call_id}")
+
+        # Start monitoring in background
+        background_tasks.add_task(monitor_call, call_id, tenant_id)
         
-        # Accept the call in background
-        background_tasks.add_task(accept_and_monitor_call, call_id, tenant_id, from_number)
-        
-        return JSONResponse(status_code=200, content={"status": "accepted"})
+        # Return response with required Authorization header
+        return JSONResponse(
+            status_code=200, 
+            content={"status": "accepted"},
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        )
     
     return JSONResponse(status_code=200, content={"status": "ignored"})
 
@@ -222,12 +266,10 @@ def verify_webhook_signature(body: bytes, signature: str, timestamp: str) -> boo
         return True
     
     try:
-        # Check timestamp is recent (within 5 minutes)
         ts = int(timestamp)
         if abs(time.time() - ts) > 300:
             return False
         
-        # Verify signature
         signed_payload = f"{timestamp}.{body.decode()}"
         expected_sig = hmac.new(
             OPENAI_WEBHOOK_SECRET.encode(),
@@ -235,7 +277,6 @@ def verify_webhook_signature(body: bytes, signature: str, timestamp: str) -> boo
             hashlib.sha256
         ).hexdigest()
         
-        # Signature format is "v1,signature"
         if signature.startswith("v1,"):
             actual_sig = signature[3:]
             return hmac.compare_digest(expected_sig, actual_sig)
@@ -244,64 +285,6 @@ def verify_webhook_signature(body: bytes, signature: str, timestamp: str) -> boo
     except Exception as e:
         print(f"Signature verification error: {e}")
         return False
-
-
-async def accept_and_monitor_call(call_id: str, tenant_id: str, from_number: str):
-    """Accept the call and monitor via WebSocket."""
-    tenant = TENANTS.get(tenant_id, TENANTS[DEFAULT_TENANT])
-    
-    print(f"🎯 Accepting call {call_id} for tenant {tenant_id}")
-    
-    # Store call state
-    active_calls[call_id] = {
-        "tenant_id": tenant_id,
-        "from_number": from_number,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "user_data": {},
-        "available_slots": []
-    }
-    
-    # Accept the call
-    accept_url = f"{OPENAI_API_BASE}/realtime/calls/{call_id}/accept"
-    accept_payload = {
-        "type": "realtime",
-        "model": "gpt-4o-realtime-preview-2024-12-17",
-        "voice": tenant["voice"],
-        "instructions": tenant["instructions"],
-        "tools": TOOLS,
-        "input_audio_format": "g711_ulaw",
-        "output_audio_format": "g711_ulaw",
-        "input_audio_transcription": {
-            "model": "whisper-1"
-        },
-        "turn_detection": {
-            "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            "silence_duration_ms": 500
-        }
-    }
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            accept_url,
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json=accept_payload,
-            timeout=30.0
-        )
-        
-        if response.status_code != 200:
-            print(f"❌ Failed to accept call: {response.status_code} - {response.text}")
-            del active_calls[call_id]
-            return
-        
-        print(f"✅ Call accepted: {call_id}")
-    
-    # Monitor the call via WebSocket
-    await monitor_call(call_id, tenant_id)
 
 
 async def monitor_call(call_id: str, tenant_id: str):
@@ -315,7 +298,7 @@ async def monitor_call(call_id: str, tenant_id: str):
         ) as ws:
             print(f"🔌 WebSocket connected for call {call_id}")
             
-            # Send initial response to greet the caller
+            # Send initial greeting prompt
             initial_response = {
                 "type": "response.create",
                 "response": {
@@ -329,7 +312,7 @@ async def monitor_call(call_id: str, tenant_id: str):
                 event = json.loads(message)
                 event_type = event.get("type")
                 
-                # Log important events
+                # Log transcriptions
                 if event_type == "conversation.item.input_audio_transcription.completed":
                     transcript = event.get("transcript", "")
                     print(f"👤 User said: {transcript}")
@@ -338,32 +321,46 @@ async def monitor_call(call_id: str, tenant_id: str):
                     transcript = event.get("transcript", "")
                     print(f"🤖 Assistant said: {transcript}")
                     
+                    # Check if booking is complete and assistant has finished speaking
+                    call_state = active_calls.get(call_id, {})
+                    if call_state.get("booking_complete"):
+                        # Check if this was a goodbye/confirmation message
+                        goodbye_phrases = ["goodbye", "thank you for calling", "have a great day", 
+                                        "adiós", "gracias por llamar", "que tenga un buen día"]
+                        if any(phrase in transcript.lower() for phrase in goodbye_phrases):
+                            print(f"👋 Booking complete, ending call...")
+                            # Wait a moment for the audio to finish playing
+                            await asyncio.sleep(2)
+                            await hangup_call(call_id)
+                            break
+                    
                 elif event_type == "response.function_call_arguments.done":
                     # Handle function calls
                     await handle_function_call(ws, call_id, event)
                     
                 elif event_type == "error":
-                    print(f"❌ Error: {event.get('error', {})}")
+                    error_info = event.get("error", {})
+                    print(f"❌ OpenAI Error: {error_info}")
                     
                 elif event_type == "session.closed":
                     print(f"📴 Session closed for call {call_id}")
                     break
                     
-    except websockets.exceptions.ConnectionClosed:
-        print(f"🔌 WebSocket disconnected for call {call_id}")
+    except websockets.exceptions.ConnectionClosed as e:
+        print(f"🔌 WebSocket disconnected for call {call_id}: {e}")
     except Exception as e:
         print(f"❌ WebSocket error: {e}")
     finally:
         # Cleanup
         if call_id in active_calls:
             del active_calls[call_id]
-        print(f"👋 Call ended: {call_id}")
+        print(f"👋 Call monitoring ended: {call_id}")
 
 
 async def handle_function_call(ws, call_id: str, event: dict):
     """Handle function calls from the Realtime API."""
     function_name = event.get("name")
-    call_item_id = event.get("call_id")  # This is the function call item ID
+    call_item_id = event.get("call_id")
     arguments_str = event.get("arguments", "{}")
     
     try:
@@ -380,27 +377,41 @@ async def handle_function_call(ws, call_id: str, event: dict):
     result = None
     
     if function_name == "get_available_slots":
-        # Store user data
+        # Store user data in call state
         call_state["user_data"] = {
-            "name": arguments.get("user_name"),
-            "email": arguments.get("user_email"),
-            "phone": arguments.get("user_phone")
+            "name": arguments.get("user_name", ""),
+            "email": arguments.get("user_email", ""),
+            "phone": arguments.get("user_phone", "")
         }
+        active_calls[call_id] = call_state
         
-        # Call our existing booking API
-        result = await get_available_slots(tenant_id, call_state["user_data"])
+        # Call the booking API to get real slots
+        result = await get_available_slots_from_api(tenant_id, call_state["user_data"])
+        
+        # Store slots in call state for booking later
         call_state["available_slots"] = result.get("slots", [])
+        active_calls[call_id] = call_state
+        
+        print(f"📅 Got {len(result.get('slots', []))} slots from API")
         
     elif function_name == "book_appointment":
         slot_number = arguments.get("slot_number", 1)
         user_data = {
-            "name": arguments.get("user_name"),
-            "email": arguments.get("user_email"),
-            "phone": arguments.get("user_phone")
+            "name": arguments.get("user_name", call_state.get("user_data", {}).get("name", "")),
+            "email": arguments.get("user_email", call_state.get("user_data", {}).get("email", "")),
+            "phone": arguments.get("user_phone", call_state.get("user_data", {}).get("phone", ""))
         }
         available_slots = call_state.get("available_slots", [])
         
-        result = await book_appointment(tenant_id, user_data, slot_number, available_slots)
+        # Call the booking API to actually book
+        result = await book_appointment_via_api(tenant_id, user_data, slot_number, available_slots)
+        
+        print(f"📝 Booking result: {result.get('success', False)}")
+        
+        # If booking successful, schedule hangup after response
+        if result.get("success"):
+            call_state["booking_complete"] = True
+            active_calls[call_id] = call_state
     
     # Send function result back to OpenAI
     if result:
@@ -416,50 +427,72 @@ async def handle_function_call(ws, call_id: str, event: dict):
         
         # Trigger response generation
         await ws.send(json.dumps({"type": "response.create"}))
+    else:
+        # Send error response
+        error_output = {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": call_item_id,
+                "output": json.dumps({"error": "Function not recognized"})
+            }
+        }
+        await ws.send(json.dumps(error_output))
+        await ws.send(json.dumps({"type": "response.create"}))
 
 
-async def get_available_slots(tenant_id: str, user_data: dict) -> dict:
-    """Get available appointment slots from booking API."""
-    print(f"📅 Getting slots for tenant {tenant_id}")
+async def get_available_slots_from_api(tenant_id: str, user_data: dict) -> dict:
+    """Get available appointment slots from the booking API."""
+    print(f"📅 Calling booking API for slots - tenant: {tenant_id}")
     
     if BOOKING_WEBHOOK_URL:
         async with httpx.AsyncClient() as client:
             try:
+                url = f"{BOOKING_WEBHOOK_URL}/voice/get-slots"
+                print(f"   URL: {url}")
+                
                 response = await client.post(
-                    f"{BOOKING_WEBHOOK_URL}/voice/get-slots",
+                    url,
                     json={
                         "tenant_id": tenant_id,
                         "user_data": user_data
                     },
                     timeout=30.0
                 )
+                
+                print(f"   Response status: {response.status_code}")
+                
                 if response.status_code == 200:
-                    return response.json()
+                    data = response.json()
+                    print(f"   Got {len(data.get('slots', []))} slots")
+                    return data
+                else:
+                    print(f"   Error: {response.text}")
+                    
             except Exception as e:
-                print(f"❌ Error getting slots: {e}")
+                print(f"❌ Error calling get-slots API: {e}")
+    else:
+        print("⚠️ BOOKING_WEBHOOK_URL not configured")
     
-    # Fallback: return mock slots if API not configured
+    # Fallback: return error message
     return {
-        "slots": [
-            {"number": 1, "display": "Monday, January 13th at 9:00 AM"},
-            {"number": 2, "display": "Monday, January 13th at 10:00 AM"},
-            {"number": 3, "display": "Tuesday, January 14th at 9:00 AM"},
-            {"number": 4, "display": "Tuesday, January 14th at 2:00 PM"},
-            {"number": 5, "display": "Wednesday, January 15th at 11:00 AM"}
-        ],
-        "message": "I have the following time slots available"
+        "slots": [],
+        "message": "I'm sorry, I'm having trouble accessing the calendar right now. Please try again later or call back."
     }
 
 
-async def book_appointment(tenant_id: str, user_data: dict, slot_number: int, available_slots: list) -> dict:
-    """Book an appointment via booking API."""
-    print(f"📝 Booking slot {slot_number} for tenant {tenant_id}")
+async def book_appointment_via_api(tenant_id: str, user_data: dict, slot_number: int, available_slots: list) -> dict:
+    """Book an appointment via the booking API."""
+    print(f"📝 Calling booking API to book slot {slot_number} - tenant: {tenant_id}")
     
     if BOOKING_WEBHOOK_URL:
         async with httpx.AsyncClient() as client:
             try:
+                url = f"{BOOKING_WEBHOOK_URL}/voice/book"
+                print(f"   URL: {url}")
+                
                 response = await client.post(
-                    f"{BOOKING_WEBHOOK_URL}/voice/book",
+                    url,
                     json={
                         "tenant_id": tenant_id,
                         "user_data": user_data,
@@ -468,25 +501,50 @@ async def book_appointment(tenant_id: str, user_data: dict, slot_number: int, av
                     },
                     timeout=30.0
                 )
+                
+                print(f"   Response status: {response.status_code}")
+                
                 if response.status_code == 200:
-                    return response.json()
+                    data = response.json()
+                    print(f"   Booking success: {data.get('success', False)}")
+                    return data
+                else:
+                    print(f"   Error: {response.text}")
+                    
             except Exception as e:
-                print(f"❌ Error booking: {e}")
+                print(f"❌ Error calling book API: {e}")
+    else:
+        print("⚠️ BOOKING_WEBHOOK_URL not configured")
     
-    # Fallback response
-    slot_display = "your selected time"
-    if available_slots and 0 < slot_number <= len(available_slots):
-        slot_display = available_slots[slot_number - 1].get("display", slot_display)
-    
+    # Fallback: return error message
     return {
-        "success": True,
-        "message": f"Your appointment has been booked for {slot_display}. You will receive a confirmation email shortly.",
-        "appointment": {
-            "slot": slot_display,
-            "user": user_data
-        }
+        "success": False,
+        "message": "I'm sorry, I couldn't complete the booking. Please try again or call back later."
     }
 
+
+async def hangup_call(call_id: str):
+    """Hang up the call via OpenAI API."""
+    print(f"📴 Hanging up call: {call_id}")
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            url = f"{OPENAI_API_BASE}/realtime/calls/{call_id}/hangup"
+            response = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}"
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                print(f"✅ Call hung up successfully: {call_id}")
+            else:
+                print(f"❌ Failed to hang up: {response.status_code} - {response.text}")
+                
+        except Exception as e:
+            print(f"❌ Error hanging up call: {e}")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))

@@ -467,6 +467,11 @@ async def monitor_call(call_id: str, tenant_id: str):
 
                     event_type = event.get("type")
 
+                    # Debug: Log all events after booking is complete
+                    call_state = active_calls.get(call_id, {})
+                    if call_state.get("booking_complete"):
+                        logger.info(f"[POST-BOOKING EVENT] {event_type}", extra=log_extra)
+
                     # Log transcriptions
                     if event_type == "conversation.item.input_audio_transcription.completed":
                         transcript = event.get("transcript", "")
@@ -475,35 +480,6 @@ async def monitor_call(call_id: str, tenant_id: str):
                     elif event_type == "response.audio_transcript.done":
                         transcript = event.get("transcript", "")
                         logger.info(f"Assistant said: {transcript[:100]}{'...' if len(transcript) > 100 else ''}", extra=log_extra)
-
-                        # Check if booking is complete and assistant has finished speaking
-                        call_state = active_calls.get(call_id, {})
-                        if call_state.get("booking_complete"):
-                            transcript_lower = transcript.lower()
-
-                            # More flexible goodbye detection - check for common farewell words/patterns
-                            farewell_indicators = [
-                                # English
-                                "goodbye", "good bye", "bye", "have a", "take care",
-                                "thank you", "thanks for", "see you", "talk to you",
-                                # Spanish
-                                "adiós", "adios", "hasta", "gracias", "buen día",
-                                "buena tarde", "que te vaya", "que le vaya", "cuídate",
-                                "nos vemos", "fue un placer"
-                            ]
-
-                            is_farewell = any(phrase in transcript_lower for phrase in farewell_indicators)
-                            logger.debug(
-                                f"Booking complete, checking for farewell",
-                                extra={**log_extra, 'is_farewell': is_farewell, 'transcript_preview': transcript_lower[:50]}
-                            )
-
-                            if is_farewell:
-                                logger.info("Booking complete and farewell detected, ending call", extra=log_extra)
-                                # Wait a moment for the audio to finish playing
-                                await asyncio.sleep(2)
-                                await hangup_call(call_id)
-                                return  # Exit the function completely
 
                     elif event_type == "response.function_call_arguments.done":
                         # Handle function calls with error handling
@@ -762,10 +738,12 @@ async def handle_function_call(ws, call_id: str, event: dict):
 
                 logger.info(f"Booking result: {result.get('success', False)}", extra=log_extra)
 
-                # If booking successful, mark for hangup after response
+                # If booking successful, schedule delayed hangup
                 if result.get("success"):
                     call_state["booking_complete"] = True
                     active_calls[call_id] = call_state
+                    # Schedule hangup after AI has time to speak confirmation
+                    asyncio.create_task(delayed_hangup(call_id, delay_seconds=12))
 
     else:
         logger.warning(f"Unknown function: {function_name}", extra=log_extra)
@@ -1059,6 +1037,21 @@ async def book_appointment_via_api(tenant_id: str, user_data: dict, slot_number:
             "success": False,
             "message": VOICE_ERROR_MESSAGES["generic_error"]["en"]
         }
+
+
+async def delayed_hangup(call_id: str, delay_seconds: int = 12):
+    """Wait for AI to finish speaking, then hang up the call."""
+    log_extra = {'call_id': call_id}
+    logger.info(f"Scheduled hangup in {delay_seconds} seconds", extra=log_extra)
+
+    await asyncio.sleep(delay_seconds)
+
+    # Check if call is still active before hanging up
+    if call_id in active_calls:
+        logger.info("Delay complete, hanging up call", extra=log_extra)
+        await hangup_call(call_id)
+    else:
+        logger.info("Call already ended, skipping hangup", extra=log_extra)
 
 
 async def hangup_call(call_id: str):

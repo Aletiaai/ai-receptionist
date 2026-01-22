@@ -1,1 +1,2 @@
 voice-server/.env
+**/outlook_token.json

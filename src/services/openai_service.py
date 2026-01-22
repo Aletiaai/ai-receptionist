@@ -6,6 +6,9 @@ Handles all interactions with the OpenAI API for chat completions.
 import os
 from typing import Optional
 from openai import OpenAI
+
+from config.settings import OPENAI_CONFIG
+from config.prompts import DATA_COLLECTION_MESSAGES
 from src.utils.logger import get_logger
 
 # Initialize logger
@@ -18,16 +21,16 @@ class OpenAIService:
     def __init__(self):
         """Initialize OpenAI client."""
         logger.info("Initializing OpenAI service")
-        
+
         api_key = os.getenv('OPENAI_API_KEY')
-        
+
         if not api_key:
             logger.error("OPENAI_API_KEY environment variable not set")
             raise ValueError("OPENAI_API_KEY is required")
-        
+
         self.client = OpenAI(api_key=api_key)
-        self.default_model = os.getenv('OPENAI_MODEL', 'gpt-4.1-mini')
-        
+        self.default_model = OPENAI_CONFIG["chat_model"]
+
         logger.info(
             "OpenAI service initialized",
             model=self.default_model
@@ -91,8 +94,8 @@ class OpenAIService:
             response = self.client.chat.completions.create(
                 model=model or self.default_model,
                 messages=messages,
-                temperature=0.7,
-                max_tokens=500
+                temperature=OPENAI_CONFIG["chat_temperature"],
+                max_tokens=OPENAI_CONFIG["chat_max_tokens"]
             )
             
             assistant_message = response.choices[0].message.content
@@ -147,51 +150,45 @@ class OpenAIService:
             Enhanced system prompt
         """
         prompt_parts = [base_prompt]
-        
+        lang = detected_language or 'en'
+
         # Add language instruction
         if detected_language:
             language_name = 'Spanish' if detected_language == 'es' else 'English'
             prompt_parts.append(
-                f"\n\nIMPORTANT: The user is communicating in {language_name}. "
-                f"You MUST respond in {language_name}."
+                DATA_COLLECTION_MESSAGES["language_instruction"][lang].format(language=language_name)
             )
-        
+
         # Add slot filling context
-        prompt_parts.append("\n\n--- DATA COLLECTION STATUS ---")
-        
+        prompt_parts.append(DATA_COLLECTION_MESSAGES["status_header"])
+
         if slot_data:
             collected = []
             missing = []
-            
+
             for field in ['name', 'email', 'phone']:
                 if slot_data.get(field):
                     collected.append(f"{field}: {slot_data[field]}")
                 else:
                     missing.append(field)
-            
+
             if collected:
-                prompt_parts.append(f"\nCollected information:\n" + "\n".join(f"- {c}" for c in collected))
-            
+                prompt_parts.append(
+                    DATA_COLLECTION_MESSAGES["collected_info"][lang] +
+                    "\n".join(f"- {c}" for c in collected)
+                )
+
             if missing:
                 prompt_parts.append(
-                    f"\nStill needed: {', '.join(missing)}"
-                    f"\nNaturally ask for this information during the conversation. "
-                    f"Ask for all fields at once."
+                    DATA_COLLECTION_MESSAGES["still_needed"][lang].format(fields=', '.join(missing))
                 )
             else:
-                prompt_parts.append(
-                    "\nAll required information collected! "
-                    "You can now help the user schedule an appointment."
-                )
+                prompt_parts.append(DATA_COLLECTION_MESSAGES["all_collected"][lang])
         else:
-            prompt_parts.append(
-                "\nNo user information collected yet. "
-                "Begin by greeting the user, then naturally collect: name, email, phone. "
-                "Collect all information at once."
-            )
-        
-        prompt_parts.append("\n--- END STATUS ---")
-        
+            prompt_parts.append(DATA_COLLECTION_MESSAGES["none_collected"][lang])
+
+        prompt_parts.append(DATA_COLLECTION_MESSAGES["status_footer"])
+
         return "".join(prompt_parts)
     
     def _build_messages(

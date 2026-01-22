@@ -3,10 +3,12 @@ Booking Service
 Orchestrates the appointment booking flow.
 """
 
-import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
+from config.settings import BOOKING_CONFIG, LOCALIZATION, SLOT_ORDINALS, DAY_ORDINALS
+from config.prompts import BOOKING_MESSAGES
 from src.utils.logger import get_logger
 from src.services.outlook_calendar_service import get_outlook_calendar_service
 from src.services.dynamo_service import get_dynamo_service
@@ -29,9 +31,10 @@ class BookingService:
     def get_available_slots(
         self,
         tenant_id: str,
-        days_ahead: int = 7,
-        slot_duration_minutes: int = 30,
-        max_slots: int = 10
+        days_ahead: int = None,
+        slot_duration_minutes: int = None,
+        max_slots: int = None,
+        specific_date: str = None
     ) -> list:
         """
         Get available appointment slots for a tenant.
@@ -40,47 +43,212 @@ class BookingService:
             days_ahead: Number of days to look ahead
             slot_duration_minutes: Duration of each slot
             max_slots: Maximum number of slots to return
+            specific_date: If provided, only get slots for this date (ISO format YYYY-MM-DD)
         Returns:
             List of available slot dictionaries
         """
+        # Use defaults from config if not specified
+        if days_ahead is None:
+            days_ahead = BOOKING_CONFIG["days_ahead"]
+        if slot_duration_minutes is None:
+            slot_duration_minutes = BOOKING_CONFIG["slot_duration_minutes"]
+        if max_slots is None:
+            max_slots = BOOKING_CONFIG["max_slots"]
+
         logger.info(
             "Getting available slots",
             tenant_id=tenant_id,
-            days_ahead=days_ahead
+            days_ahead=days_ahead,
+            specific_date=specific_date
         )
-        
+
         # Get tenant configuration
         tenant = self.dynamo_service.get_tenant(tenant_id)
-        
+
         if not tenant:
             logger.error("Tenant not found", tenant_id=tenant_id)
             return []
-        
+
         # Get calendar ID from tenant config (if specified)
         calendar_id = tenant.get("calendar_id")
-        
-        # Get availability
-        start_date = datetime.now(timezone.utc)
-        end_date = start_date + timedelta(days=days_ahead)
-        
+
+        # Determine date range
+        local_tz = ZoneInfo(BOOKING_CONFIG["default_timezone"])
+
+        if specific_date:
+            # Query only the specific date - interpret date in local timezone
+            # specific_date is in format "YYYY-MM-DD"
+            year, month, day = map(int, specific_date.split("-"))
+            start_date = datetime(year, month, day, 0, 0, 0, tzinfo=local_tz)
+            end_date = start_date + timedelta(days=1)
+            logger.info(
+                "Filtering for specific date",
+                specific_date=specific_date,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat()
+            )
+        else:
+            # Query full range
+            start_date = datetime.now(timezone.utc)
+            end_date = start_date + timedelta(days=days_ahead)
+
         slots = self.calendar_service.get_availability(
             calendar_id=calendar_id,
             start_date=start_date,
             end_date=end_date,
             slot_duration_minutes=slot_duration_minutes
         )
-        
+
         # Limit the number of slots returned
         limited_slots = slots[:max_slots]
-        
+
         logger.info(
             "Available slots retrieved",
             tenant_id=tenant_id,
             total_slots=len(slots),
-            returned_slots=len(limited_slots)
+            returned_slots=len(limited_slots),
+            specific_date=specific_date
         )
-        
+
         return limited_slots
+
+    def get_available_days(
+        self,
+        tenant_id: str,
+        days_ahead: int = None,
+        slot_duration_minutes: int = None
+    ) -> list:
+        """
+        Get available days for booking (next 7 work days with availability).
+        Args:
+            tenant_id: The tenant ID
+            days_ahead: Number of days to look ahead
+            slot_duration_minutes: Duration of each slot
+        Returns:
+            List of available day dictionaries with date, day_name, display, slot_count
+        """
+        # Use defaults from config if not specified
+        if days_ahead is None:
+            days_ahead = BOOKING_CONFIG["days_ahead"]
+        if slot_duration_minutes is None:
+            slot_duration_minutes = BOOKING_CONFIG["slot_duration_minutes"]
+
+        logger.info(
+            "Getting available days",
+            tenant_id=tenant_id,
+            days_ahead=days_ahead
+        )
+
+        # Get all slots for the date range (no max limit for day aggregation)
+        all_slots = self.get_available_slots(
+            tenant_id=tenant_id,
+            days_ahead=days_ahead,
+            slot_duration_minutes=slot_duration_minutes,
+            max_slots=1000  # Get all slots for aggregation
+        )
+
+        if not all_slots:
+            logger.info("No slots available", tenant_id=tenant_id)
+            return []
+
+        # Group slots by date
+        days_map = {}
+        for slot in all_slots:
+            slot_time = datetime.fromisoformat(slot["start"])
+            date_str = slot_time.strftime("%Y-%m-%d")
+
+            if date_str not in days_map:
+                days_map[date_str] = {
+                    "date": date_str,
+                    "datetime": slot_time,
+                    "slot_count": 0
+                }
+            days_map[date_str]["slot_count"] += 1
+
+        # Convert to list and sort by date
+        available_days = sorted(days_map.values(), key=lambda d: d["date"])
+
+        # Build display information for each day
+        result = []
+        for day_info in available_days:
+            dt = day_info["datetime"]
+            result.append({
+                "date": day_info["date"],
+                "day_name_en": LOCALIZATION["days"]["en"][dt.weekday()],
+                "day_name_es": LOCALIZATION["days"]["es"][dt.weekday()],
+                "month_name_en": LOCALIZATION["months"]["en"][dt.month - 1],
+                "month_name_es": LOCALIZATION["months"]["es"][dt.month - 1],
+                "day_number": dt.day,
+                "slot_count": day_info["slot_count"]
+            })
+
+        logger.info(
+            "Available days retrieved",
+            tenant_id=tenant_id,
+            total_days=len(result)
+        )
+
+        return result
+
+    def format_days_for_display(
+        self,
+        days: list,
+        language: str = "en"
+    ) -> str:
+        """
+        Format available days as a readable string for the AI to present.
+        Args:
+            days: List of day dictionaries from get_available_days()
+            language: Language code ('en' or 'es')
+        Returns:
+            Formatted string of available days
+        """
+        if not days:
+            return BOOKING_MESSAGES["no_days_message"].get(language, BOOKING_MESSAGES["no_days_message"]["en"])
+
+        header = BOOKING_MESSAGES["days_header"].get(language, BOOKING_MESSAGES["days_header"]["en"])
+
+        lines = []
+        for i, day in enumerate(days, 1):
+            if language == "es":
+                day_name = day["day_name_es"]
+                month_name = day["month_name_es"]
+                lines.append(f"{i}. {day_name}, {day['day_number']} de {month_name} ({day['slot_count']} horarios)")
+            else:
+                day_name = day["day_name_en"]
+                month_name = day["month_name_en"]
+                lines.append(f"{i}. {day_name}, {month_name} {day['day_number']} ({day['slot_count']} slots)")
+
+        return header + "\n".join(lines)
+
+    def parse_day_selection(self, user_message: str, max_days: int) -> Optional[int]:
+        """
+        Parse user's day selection from their message.
+        Args:
+            user_message: The user's message
+            max_days: Maximum valid day number
+        Returns:
+            Day index (1-based) or None if not found
+        """
+        import re
+
+        # Look for number in message
+        numbers = re.findall(r'\b(\d+)\b', user_message)
+
+        for num_str in numbers:
+            num = int(num_str)
+            if 1 <= num <= max_days:
+                logger.debug(f"Parsed day selection: {num}")
+                return num
+
+        # Check for ordinal words using DAY_ORDINALS from config
+        message_lower = user_message.lower()
+        for word, num in DAY_ORDINALS.items():
+            if word in message_lower and num <= max_days:
+                logger.debug(f"Parsed ordinal day selection: {num}")
+                return num
+
+        return None
     
     def format_slots_for_display(
         self,
@@ -96,35 +264,29 @@ class BookingService:
             Formatted string of available slots
         """
         if not slots:
-            if language == "es":
-                return "No hay horarios disponibles en los próximos días."
-            return "No available slots in the coming days."
-        
-        if language == "es":
-            header = "Horarios disponibles:\n"
-        else:
-            header = "Available time slots:\n"
-        
+            return BOOKING_MESSAGES["no_slots_message"].get(language, BOOKING_MESSAGES["no_slots_message"]["en"])
+
+        header = BOOKING_MESSAGES["slots_header"].get(language, BOOKING_MESSAGES["slots_header"]["en"])
+
         lines = []
         for i, slot in enumerate(slots, 1):
             # Parse the datetime for localized formatting
             slot_time = datetime.fromisoformat(slot["start"])
-            
+
             if language == "es":
-                # Spanish format
-                days_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-                months_es = ["enero", "febrero", "marzo", "abril", "mayo", "junio", 
-                            "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
-                
-                day_name = days_es[slot_time.weekday()]
-                month_name = months_es[slot_time.month - 1]
+                # Spanish format using LOCALIZATION
+                days = LOCALIZATION["days"]["es"]
+                months = LOCALIZATION["months"]["es"]
+
+                day_name = days[slot_time.weekday()]
+                month_name = months[slot_time.month - 1]
                 time_str = slot_time.strftime("%I:%M %p")
-                
+
                 lines.append(f"{i}. {day_name}, {slot_time.day} de {month_name} a las {time_str}")
             else:
                 # English format
                 lines.append(f"{i}. {slot['display']}")
-        
+
         return header + "\n".join(lines)
     
     def book_appointment(
@@ -255,31 +417,23 @@ Appointment Details:
             Slot index (1-based) or None if not found
         """
         import re
-        
+
         # Look for number in message
         numbers = re.findall(r'\b(\d+)\b', user_message)
-        
+
         for num_str in numbers:
             num = int(num_str)
             if 1 <= num <= max_slots:
                 logger.debug(f"Parsed slot selection: {num}")
                 return num
-        
-        # Check for ordinal words
-        ordinals = {
-            "first": 1, "primero": 1, "primera": 1, "1st": 1,
-            "second": 2, "segundo": 2, "segunda": 2, "2nd": 2,
-            "third": 3, "tercero": 3, "tercera": 3, "3rd": 3,
-            "fourth": 4, "cuarto": 4, "cuarta": 4, "4th": 4,
-            "fifth": 5, "quinto": 5, "quinta": 5, "5th": 5,
-        }
-        
+
+        # Check for ordinal words using SLOT_ORDINALS from config
         message_lower = user_message.lower()
-        for word, num in ordinals.items():
+        for word, num in SLOT_ORDINALS.items():
             if word in message_lower and num <= max_slots:
                 logger.debug(f"Parsed ordinal slot selection: {num}")
                 return num
-        
+
         return None
 
     def _send_booking_notifications(
@@ -300,16 +454,14 @@ Appointment Details:
         try:
             email_service = get_email_service()
             tenant_name = tenant.get("name", "Appointment")
-            
+
             # Parse slot for display
-            from datetime import datetime
             slot_time = datetime.fromisoformat(slot["start"])
-            
+
             if detected_language == "es":
-                days_es = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-                months_es = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
-                            "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
-                appointment_date = f"{days_es[slot_time.weekday()]}, {slot_time.day} de {months_es[slot_time.month - 1]} de {slot_time.year}"
+                days = LOCALIZATION["days"]["es"]
+                months = LOCALIZATION["months"]["es"]
+                appointment_date = f"{days[slot_time.weekday()]}, {slot_time.day} de {months[slot_time.month - 1]} de {slot_time.year}"
             else:
                 appointment_date = slot_time.strftime("%A, %B %d, %Y")
             

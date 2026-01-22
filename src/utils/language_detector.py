@@ -7,56 +7,17 @@ Falls back to OpenAI for ambiguous cases if needed.
 
 import re
 from typing import Optional
+
+from config.settings import LANGUAGE_INDICATORS
 from src.utils.logger import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
 
-# Common Spanish words (high-frequency indicators)
-SPANISH_INDICATORS = {
-    # Greetings
-    'hola', 'buenos', 'buenas', 'días', 'tardes', 'noches',
-    # Pronouns
-    'yo', 'tú', 'él', 'ella', 'nosotros', 'ustedes', 'ellos',
-    # Common verbs
-    'quiero', 'necesito', 'tengo', 'puedo', 'estoy', 'soy',
-    'quisiera', 'gustaría', 'gustaria', 'hacer', 'tener', 'poder',
-    # Question words
-    'qué', 'cómo', 'cuándo', 'dónde', 'cuál', 'quién', 'por',
-    'que', 'como', 'cuando', 'donde', 'cual', 'quien',
-    # Articles and prepositions
-    'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
-    'de', 'en', 'con', 'para', 'por',
-    # Common words
-    'sí', 'no', 'gracias', 'favor', 'ayuda', 'información',
-    'cita', 'reservar', 'agendar', 'fecha', 'hora',
-    # Appointment related
-    'disponibilidad', 'horario', 'calendario', 'reunión',
-    'consulta', 'servicio', 'atención'
-}
-
-# Common English words (high-frequency indicators)
-ENGLISH_INDICATORS = {
-    # Greetings
-    'hello', 'hi', 'hey', 'good', 'morning', 'afternoon', 'evening',
-    # Pronouns
-    'i', 'you', 'he', 'she', 'we', 'they', 'my', 'your',
-    # Common verbs
-    'want', 'need', 'have', 'can', 'would', 'like', 'make', 'get',
-    'am', 'is', 'are', 'was', 'were',
-    # Question words
-    'what', 'how', 'when', 'where', 'which', 'who', 'why',
-    # Articles and prepositions
-    'the', 'a', 'an', 'of', 'in', 'with', 'for', 'to', 'at',
-    # Common words
-    'yes', 'no', 'thanks', 'thank', 'please', 'help', 'information',
-    'appointment', 'book', 'schedule', 'date', 'time',
-    # Appointment related
-    'availability', 'meeting', 'consultation', 'service'
-}
-
-# Spanish-specific characters
-SPANISH_CHARS = set('áéíóúüñ¿¡')
+# Load language indicators from config
+SPANISH_INDICATORS = LANGUAGE_INDICATORS["spanish"]
+ENGLISH_INDICATORS = LANGUAGE_INDICATORS["english"]
+SPANISH_CHARS = LANGUAGE_INDICATORS["spanish_chars"]
 
 
 class LanguageDetector:

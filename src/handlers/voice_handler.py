@@ -7,6 +7,8 @@ Called by the voice server (Fargate) during phone calls.
 import json
 from typing import Any
 
+from config.settings import BOOKING_CONFIG, API_CONFIG
+from config.prompts import VOICE_ERROR_MESSAGES
 from src.utils.logger import get_logger
 from src.services.dynamo_service import get_dynamo_service
 from src.services.booking_service import get_booking_service
@@ -15,43 +17,110 @@ from src.services.booking_service import get_booking_service
 logger = get_logger(__name__)
 
 
-def voice_get_slots_handler(event: dict, context: Any) -> dict:
+def voice_get_days_handler(event: dict, context: Any) -> dict:
     """
-    Get available appointment slots for voice booking.
+    Get available days for voice booking.
     Called by the voice server when user provides their information.
-    
+
     Args:
         event: API Gateway event
         context: Lambda context
-    
+
+    Returns:
+        API Gateway response with available days
+    """
+    logger.info("Voice get days handler invoked")
+
+    try:
+        # Parse request
+        body = _parse_body(event)
+
+        tenant_id = body.get('tenant_id', 'consulate')
+        user_data = body.get('user_data', {})
+
+        logger.info(
+            "Getting days for voice",
+            tenant_id=tenant_id,
+            user_name=user_data.get('name')
+        )
+
+        # Get booking service
+        booking_service = get_booking_service()
+
+        # Get available days
+        days = booking_service.get_available_days(
+            tenant_id=tenant_id,
+            days_ahead=BOOKING_CONFIG["days_ahead"]
+        )
+
+        # Format days for voice
+        formatted_days = []
+        for i, day in enumerate(days, 1):
+            formatted_days.append({
+                "number": i,
+                "date": day.get('date', ''),
+                "display_en": f"{day.get('day_name_en', '')} {day.get('month_name_en', '')} {day.get('day_number', '')}",
+                "display_es": f"{day.get('day_name_es', '')} {day.get('day_number', '')} de {day.get('month_name_es', '')}",
+                "slot_count": day.get('slot_count', 0)
+            })
+
+        # Build response message
+        if formatted_days:
+            day_descriptions = ". ".join([f"Option {d['number']} is {d['display_en']}" for d in formatted_days])
+            message = VOICE_ERROR_MESSAGES["days_available"]["en"].format(day_descriptions=day_descriptions)
+        else:
+            message = VOICE_ERROR_MESSAGES["no_days_week"]["en"]
+
+        return _success_response({
+            "days": formatted_days,
+            "message": message
+        })
+
+    except Exception as e:
+        logger.error("Error in voice get days", error=str(e), exc_info=True)
+        return _error_response(500, str(e))
+
+
+def voice_get_slots_handler(event: dict, context: Any) -> dict:
+    """
+    Get available appointment slots for voice booking.
+    Called by the voice server after user selects a day.
+
+    Args:
+        event: API Gateway event
+        context: Lambda context
+
     Returns:
         API Gateway response with available slots
     """
     logger.info("Voice get slots handler invoked")
-    
+
     try:
         # Parse request
         body = _parse_body(event)
-        
+
         tenant_id = body.get('tenant_id', 'consulate')
         user_data = body.get('user_data', {})
-        
+        preferred_date = body.get('preferred_date')  # Optional: specific date to query
+
         logger.info(
             "Getting slots for voice",
             tenant_id=tenant_id,
-            user_name=user_data.get('name')
+            user_name=user_data.get('name'),
+            preferred_date=preferred_date
         )
-        
+
         # Get booking service
         booking_service = get_booking_service()
-        
-        # Get available slots
+
+        # Get available slots (for specific date if provided)
         slots = booking_service.get_available_slots(
             tenant_id=tenant_id,
-            days_ahead=7,
-            max_slots=5
+            days_ahead=BOOKING_CONFIG["days_ahead"],
+            max_slots=BOOKING_CONFIG["voice_max_slots"],
+            specific_date=preferred_date
         )
-        
+
         # Format slots for voice
         formatted_slots = []
         for i, slot in enumerate(slots, 1):
@@ -61,21 +130,19 @@ def voice_get_slots_handler(event: dict, context: Any) -> dict:
                 "start": slot.get('start', ''),
                 "end": slot.get('end', '')
             })
-        
+
         # Build response message
         if formatted_slots:
-            message = "I have the following time slots available: "
-            slot_descriptions = [f"Option {s['number']} is {s['display']}" for s in formatted_slots]
-            message += ". ".join(slot_descriptions)
-            message += ". Which option would you prefer?"
+            slot_descriptions = ". ".join([f"Option {s['number']} is {s['display']}" for s in formatted_slots])
+            message = VOICE_ERROR_MESSAGES["slots_available"]["en"].format(slot_descriptions=slot_descriptions)
         else:
-            message = "I'm sorry, there are no available slots in the next 7 days. Would you like me to check further out?"
-        
+            message = VOICE_ERROR_MESSAGES["no_slots_week"]["en"]
+
         return _success_response({
             "slots": formatted_slots,
             "message": message
         })
-        
+
     except Exception as e:
         logger.error("Error in voice get slots", error=str(e), exc_info=True)
         return _error_response(500, str(e))
@@ -115,13 +182,13 @@ def voice_book_handler(event: dict, context: Any) -> dict:
         if not available_slots:
             return _success_response({
                 "success": False,
-                "message": "No available slots provided. Please get available slots first."
+                "message": VOICE_ERROR_MESSAGES["no_slots_provided"]["en"]
             })
-        
+
         if slot_number < 1 or slot_number > len(available_slots):
             return _success_response({
                 "success": False,
-                "message": f"Invalid slot number. Please choose between 1 and {len(available_slots)}."
+                "message": VOICE_ERROR_MESSAGES["invalid_slot_number"]["en"].format(max_slots=len(available_slots))
             })
         
         # Get the selected slot
@@ -162,13 +229,12 @@ def voice_book_handler(event: dict, context: Any) -> dict:
         if result.get('success'):
             slot_display = selected_slot.get('display', 'your selected time')
             user_email = user_data.get('email', 'your email address')
-            
-            message = (
-                f"Your appointment has been booked for {slot_display}. "
-                f"You will receive a confirmation email at {user_email}. "
-                f"Is there anything else I can help you with?"
+
+            message = VOICE_ERROR_MESSAGES["booking_confirmation"]["en"].format(
+                slot_display=slot_display,
+                user_email=user_email
             )
-            
+
             return _success_response({
                 "success": True,
                 "message": message,
@@ -182,7 +248,7 @@ def voice_book_handler(event: dict, context: Any) -> dict:
             error_msg = result.get('error', 'Please try again.')
             return _success_response({
                 "success": False,
-                "message": f"I'm sorry, I couldn't book that appointment. {error_msg}"
+                "message": VOICE_ERROR_MESSAGES["booking_failed"]["en"].format(error=error_msg)
             })
         
     except Exception as e:
@@ -202,14 +268,12 @@ def _parse_body(event: dict) -> dict:
 
 def _success_response(data: dict) -> dict:
     """Build a successful API Gateway response."""
+    headers = {'Content-Type': 'application/json'}
+    headers.update(API_CONFIG["cors_headers"])
+
     return {
         'statusCode': 200,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-            'Access-Control-Allow-Methods': 'POST,OPTIONS'
-        },
+        'headers': headers,
         'body': json.dumps(data)
     }
 
@@ -221,15 +285,13 @@ def _error_response(status_code: int, error_message: str) -> dict:
         status_code=status_code,
         error_detail=error_message
     )
-    
+
+    headers = {'Content-Type': 'application/json'}
+    headers.update(API_CONFIG["cors_headers"])
+
     return {
         'statusCode': status_code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-            'Access-Control-Allow-Methods': 'POST,OPTIONS'
-        },
+        'headers': headers,
         'body': json.dumps({
             'error': error_message,
             'status_code': status_code

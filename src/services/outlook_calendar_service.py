@@ -12,6 +12,7 @@ import requests
 import msal
 from dotenv import load_dotenv
 
+from config.settings import BOOKING_CONFIG, API_CONFIG, OAUTH_CONFIG
 from src.utils.logger import get_logger
 from src.services.dynamo_service import get_dynamo_service
 
@@ -21,19 +22,19 @@ load_dotenv()
 # Initialize logger
 logger = get_logger(__name__)
 
-# Configuration
+# Configuration from environment
 CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
 TENANT_ID = os.getenv("AZURE_TENANT_ID")
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+AUTHORITY = f"{OAUTH_CONFIG['authority_url']}/{TENANT_ID}"
 SCOPES = ["https://graph.microsoft.com/.default"]
-GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
+GRAPH_API_BASE = API_CONFIG["graph_api_base"]
 
-DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "America/Mexico_City")
+DEFAULT_TIMEZONE = BOOKING_CONFIG["default_timezone"]
 
 # Token storage configuration
-TOKEN_TENANT_ID = "global"
-TOKEN_PROVIDER = "outlook"
+TOKEN_TENANT_ID = OAUTH_CONFIG["token_tenant_id"]
+TOKEN_PROVIDER = OAUTH_CONFIG["outlook_provider"]
 
 
 class OutlookCalendarService:
@@ -215,13 +216,13 @@ class OutlookCalendarService:
         events: list,
         start_date: datetime,
         end_date: datetime,
-        slot_duration_minutes: int = 30,
-        business_hours_start: int = 9,
-        business_hours_end: int = 17
+        slot_duration_minutes: int = None,
+        business_hours_start: int = None,
+        business_hours_end: int = None
     ) -> list:
         """
         Calculate available time slots based on existing events.
-        
+
         Args:
             events: List of existing events
             start_date: Start of date range
@@ -229,23 +230,31 @@ class OutlookCalendarService:
             slot_duration_minutes: Duration of each slot
             business_hours_start: Start of business hours (hour in local timezone)
             business_hours_end: End of business hours (hour in local timezone)
-        
+
         Returns:
             List of available slot dictionaries
         """
+        # Use defaults from config if not specified
+        if slot_duration_minutes is None:
+            slot_duration_minutes = BOOKING_CONFIG["slot_duration_minutes"]
+        if business_hours_start is None:
+            business_hours_start = BOOKING_CONFIG["business_hours"]["start"]
+        if business_hours_end is None:
+            business_hours_end = BOOKING_CONFIG["business_hours"]["end"]
+
         available_slots = []
         local_tz = ZoneInfo(DEFAULT_TIMEZONE)
-        
+
         # Parse existing events into busy times (convert to local timezone)
         busy_times = []
         for event in events:
             if event.get("isCancelled"):
                 continue
-            
+
             # Parse event times
             event_start_str = event["start"]["dateTime"]
             event_end_str = event["end"]["dateTime"]
-            
+
             # Handle different datetime formats from Microsoft Graph
             if event_start_str.endswith("Z"):
                 event_start = datetime.fromisoformat(event_start_str.replace("Z", "+00:00"))
@@ -253,28 +262,41 @@ class OutlookCalendarService:
                 event_start = datetime.fromisoformat(event_start_str)
             else:
                 event_start = datetime.fromisoformat(event_start_str).replace(tzinfo=timezone.utc)
-            
+
             if event_end_str.endswith("Z"):
                 event_end = datetime.fromisoformat(event_end_str.replace("Z", "+00:00"))
             elif "+" in event_end_str or event_end_str.count("-") > 2:
                 event_end = datetime.fromisoformat(event_end_str)
             else:
                 event_end = datetime.fromisoformat(event_end_str).replace(tzinfo=timezone.utc)
-            
+
             busy_times.append((event_start, event_end))
-        
+
         # Get current time in local timezone
         now_local = datetime.now(local_tz)
-        
-        # Start from today in local timezone
-        current_date = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        # Calculate end date in local timezone
-        end_date_local = current_date + timedelta(days=7)
+
+        # Convert start_date and end_date to local timezone for slot calculation
+        if start_date.tzinfo is None:
+            start_date = start_date.replace(tzinfo=timezone.utc)
+        start_date_local = start_date.astimezone(local_tz)
+
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=timezone.utc)
+        end_date_local = end_date.astimezone(local_tz)
+
+        # Start from the requested start date (at midnight local time)
+        current_date = start_date_local.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        logger.debug(
+            "Calculating available slots",
+            start_date_local=current_date.isoformat(),
+            end_date_local=end_date_local.isoformat(),
+            now_local=now_local.isoformat()
+        )
         
         while current_date < end_date_local:
-            # Skip weekends
-            if current_date.weekday() < 5:  # Monday = 0, Friday = 4
+            # Skip weekends (Monday = 0, Friday = 4)
+            if current_date.weekday() < 5:
                 # Generate slots for business hours in LOCAL timezone
                 slot_time = current_date.replace(hour=business_hours_start, minute=0)
                 day_end = current_date.replace(hour=business_hours_end, minute=0)

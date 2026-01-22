@@ -11,6 +11,8 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from config.settings import LOGGING_CONFIG
+
 
 class JSONFormatter(logging.Formatter):
     """
@@ -61,15 +63,15 @@ class ContextLogger:
         # Avoid duplicate handlers
         if self.logger.handlers:
             return
-        
-        # Set log level from environment variable
-        log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+
+        # Set log level from config
+        log_level = LOGGING_CONFIG["default_level"]
         self.logger.setLevel(getattr(logging, log_level, logging.INFO))
-        
+
         # Create handler
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(self.logger.level)
-        
+
         # Use JSON formatter for production, simple format for local dev
         if os.getenv('AWS_LAMBDA_FUNCTION_NAME'):
             # Running in Lambda - use JSON format
@@ -77,11 +79,11 @@ class ContextLogger:
         else:
             # Local development - use readable format
             formatter = logging.Formatter(
-                '%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
+                LOGGING_CONFIG["local_format"],
+                datefmt=LOGGING_CONFIG["local_date_format"]
             )
             handler.setFormatter(formatter)
-        
+
         self.logger.addHandler(handler)
     
     def set_context(self, **kwargs) -> 'ContextLogger':

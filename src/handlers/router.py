@@ -27,18 +27,22 @@ def route_request(event: dict, context: Any) -> dict:
     logger.info("Routing request", path=path)
     
     # Route based on path
-    if '/voice/get-slots' in path:
+    if '/voice/get-days' in path:
+        from src.handlers.voice_handler import voice_get_days_handler
+        return voice_get_days_handler(event, context)
+
+    elif '/voice/get-slots' in path:
         from src.handlers.voice_handler import voice_get_slots_handler
         return voice_get_slots_handler(event, context)
-    
+
     elif '/voice/book' in path:
         from src.handlers.voice_handler import voice_book_handler
         return voice_book_handler(event, context)
-    
+
     elif '/chat/' in path:
         from src.handlers.chat_handler import lambda_handler
         return lambda_handler(event, context)
-    
+
     else:
         # Default to chat handler for backwards compatibility
         from src.handlers.chat_handler import lambda_handler

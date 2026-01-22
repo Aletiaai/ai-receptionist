@@ -4,10 +4,11 @@ Handles all database operations for tenants, conversations, and appointments.
 """
 
 import boto3
-import os
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
+
+from config.settings import AWS_CONFIG
 from src.utils.logger import get_logger
 
 # Initialize logger
@@ -20,22 +21,17 @@ class DynamoService:
     def __init__(self):
         """Initialize DynamoDB resource and tables."""
         logger.info("Initializing DynamoDB service")
-        
+
         self.dynamodb = boto3.resource(
             'dynamodb',
-            region_name=os.getenv('AWS_REGION', 'us-east-2')
+            region_name=AWS_CONFIG["region"]
         )
-        
-        self.tenants_table = self.dynamodb.Table(
-            os.getenv('DYNAMODB_TENANTS_TABLE', 'ai-receptionist-tenants')
-        )
-        self.conversations_table = self.dynamodb.Table(
-            os.getenv('DYNAMODB_CONVERSATIONS_TABLE', 'ai-receptionist-conversations')
-        )
-        self.appointments_table = self.dynamodb.Table(
-            os.getenv('DYNAMODB_APPOINTMENTS_TABLE', 'ai-receptionist-appointments')
-        )
-        
+
+        tables = AWS_CONFIG["dynamodb_tables"]
+        self.tenants_table = self.dynamodb.Table(tables["tenants"])
+        self.conversations_table = self.dynamodb.Table(tables["conversations"])
+        self.appointments_table = self.dynamodb.Table(tables["appointments"])
+
         logger.info(
             "DynamoDB service initialized",
             tables={

@@ -7,10 +7,12 @@ import os
 from typing import Optional
 import requests
 from dotenv import load_dotenv
+import msal
 
+from config.settings import EMAIL_CONFIG, API_CONFIG, OAUTH_CONFIG
+from config.prompts import EMAIL_TEMPLATES
 from src.utils.logger import get_logger
 from src.services.dynamo_service import get_dynamo_service
-import msal
 
 # Load environment variables
 load_dotenv()
@@ -18,19 +20,19 @@ load_dotenv()
 # Initialize logger
 logger = get_logger(__name__)
 
-# Configuration
+# Configuration from environment
 CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
 TENANT_ID = os.getenv("AZURE_TENANT_ID")
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
+AUTHORITY = f"{OAUTH_CONFIG['authority_url']}/{TENANT_ID}"
+GRAPH_API_BASE = API_CONFIG["graph_api_base"]
 
 # Token storage configuration
-TOKEN_TENANT_ID = "global"
-TOKEN_PROVIDER = "outlook"
+TOKEN_TENANT_ID = OAUTH_CONFIG["token_tenant_id"]
+TOKEN_PROVIDER = OAUTH_CONFIG["outlook_provider"]
 
 # Email sender (the M365 account we authorized)
-DEFAULT_SENDER_NAME = os.getenv("EMAIL_SENDER_NAME", "AI Receptionist")
+DEFAULT_SENDER_NAME = EMAIL_CONFIG["sender_name"]
 
 
 class EmailService:
@@ -214,104 +216,24 @@ class EmailService:
             tenant=tenant_name,
             language=language
         )
-        
-        if language == "es":
-            subject = f"Confirmación de Cita - {tenant_name}"
-            body_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                    .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                    .header {{ background-color: #2563eb; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
-                    .content {{ background-color: #f8fafc; padding: 30px; border-radius: 0 0 8px 8px; }}
-                    .appointment-box {{ background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 20px 0; }}
-                    .label {{ color: #64748b; font-size: 12px; text-transform: uppercase; margin-bottom: 5px; }}
-                    .value {{ font-size: 18px; font-weight: bold; color: #1e293b; }}
-                    .footer {{ text-align: center; color: #64748b; font-size: 12px; margin-top: 20px; }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>✅ Cita Confirmada</h1>
-                    </div>
-                    <div class="content">
-                        <p>Hola <strong>{to_name}</strong>,</p>
-                        <p>Su cita ha sido confirmada exitosamente. A continuación los detalles:</p>
-                        
-                        <div class="appointment-box">
-                            <div class="label">Fecha</div>
-                            <div class="value">{appointment_date}</div>
-                            <br>
-                            <div class="label">Hora</div>
-                            <div class="value">{appointment_time}</div>
-                            <br>
-                            <div class="label">Lugar</div>
-                            <div class="value">{tenant_name}</div>
-                        </div>
-                        
-                        <p>También recibirá una invitación de calendario.</p>
-                        <p>Si necesita reprogramar o cancelar, por favor contáctenos.</p>
-                        
-                        <div class="footer">
-                            <p>Este es un correo automático enviado por el Asistente Virtual de {tenant_name}</p>
-                        </div>
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-        else:
-            subject = f"Appointment Confirmation - {tenant_name}"
-            body_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                    .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                    .header {{ background-color: #2563eb; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
-                    .content {{ background-color: #f8fafc; padding: 30px; border-radius: 0 0 8px 8px; }}
-                    .appointment-box {{ background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 20px 0; }}
-                    .label {{ color: #64748b; font-size: 12px; text-transform: uppercase; margin-bottom: 5px; }}
-                    .value {{ font-size: 18px; font-weight: bold; color: #1e293b; }}
-                    .footer {{ text-align: center; color: #64748b; font-size: 12px; margin-top: 20px; }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>✅ Appointment Confirmed</h1>
-                    </div>
-                    <div class="content">
-                        <p>Hello <strong>{to_name}</strong>,</p>
-                        <p>Your appointment has been successfully confirmed. Here are the details:</p>
-                        
-                        <div class="appointment-box">
-                            <div class="label">Date</div>
-                            <div class="value">{appointment_date}</div>
-                            <br>
-                            <div class="label">Time</div>
-                            <div class="value">{appointment_time}</div>
-                            <br>
-                            <div class="label">Location</div>
-                            <div class="value">{tenant_name}</div>
-                        </div>
-                        
-                        <p>You will also receive a calendar invitation.</p>
-                        <p>If you need to reschedule or cancel, please contact us.</p>
-                        
-                        <div class="footer">
-                            <p>This is an automated message from {tenant_name}'s Virtual Assistant</p>
-                        </div>
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-        
+
+        # Get template for language
+        template = EMAIL_TEMPLATES["user_confirmation"].get(language, EMAIL_TEMPLATES["user_confirmation"]["en"])
+        colors = EMAIL_CONFIG["colors"]
+
+        subject = template["subject"].format(tenant_name=tenant_name)
+        body_html = template["body"].format(
+            primary_color=colors["primary"],
+            bg_color=colors["background"],
+            border_color=colors["border"],
+            text_primary=colors["text_primary"],
+            text_secondary=colors["text_secondary"],
+            to_name=to_name,
+            appointment_date=appointment_date,
+            appointment_time=appointment_time,
+            tenant_name=tenant_name
+        )
+
         return self.send_email(
             to_email=to_email,
             to_name=to_name,
@@ -348,74 +270,26 @@ class EmailService:
             tenant=tenant_name,
             user_name=user_name
         )
-        
-        subject = f"📅 Nueva Cita Agendada - {user_name}"
-        
-        body_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #16a34a; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
-                .content {{ background-color: #f8fafc; padding: 30px; border-radius: 0 0 8px 8px; }}
-                .info-box {{ background-color: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 20px 0; }}
-                .row {{ display: flex; margin-bottom: 10px; }}
-                .label {{ color: #64748b; width: 120px; font-weight: bold; }}
-                .value {{ color: #1e293b; }}
-                .footer {{ text-align: center; color: #64748b; font-size: 12px; margin-top: 20px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>📅 Nueva Cita Agendada</h1>
-                </div>
-                <div class="content">
-                    <p>Se ha agendado una nueva cita a través del Asistente Virtual.</p>
-                    
-                    <div class="info-box">
-                        <h3 style="margin-top: 0; color: #1e293b;">Información del Cliente</h3>
-                        <div class="row">
-                            <span class="label">Nombre:</span>
-                            <span class="value">{user_name}</span>
-                        </div>
-                        <div class="row">
-                            <span class="label">Email:</span>
-                            <span class="value">{user_email}</span>
-                        </div>
-                        <div class="row">
-                            <span class="label">Teléfono:</span>
-                            <span class="value">{user_phone}</span>
-                        </div>
-                    </div>
-                    
-                    <div class="info-box">
-                        <h3 style="margin-top: 0; color: #1e293b;">Detalles de la Cita</h3>
-                        <div class="row">
-                            <span class="label">Fecha:</span>
-                            <span class="value">{appointment_date}</span>
-                        </div>
-                        <div class="row">
-                            <span class="label">Hora:</span>
-                            <span class="value">{appointment_time}</span>
-                        </div>
-                        <div class="row">
-                            <span class="label">Servicio:</span>
-                            <span class="value">{tenant_name}</span>
-                        </div>
-                    </div>
-                    
-                    <div class="footer">
-                        <p>Mensaje automático del Asistente Virtual de {tenant_name}</p>
-                    </div>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
+
+        # Get template and colors from config
+        template = EMAIL_TEMPLATES["admin_notification"]
+        colors = EMAIL_CONFIG["colors"]
+
+        subject = template["subject"].format(user_name=user_name)
+        body_html = template["body"].format(
+            success_color=colors["success"],
+            bg_color=colors["background"],
+            border_color=colors["border"],
+            text_primary=colors["text_primary"],
+            text_secondary=colors["text_secondary"],
+            user_name=user_name,
+            user_email=user_email,
+            user_phone=user_phone,
+            appointment_date=appointment_date,
+            appointment_time=appointment_time,
+            tenant_name=tenant_name
+        )
+
         return self.send_email(
             to_email=admin_email,
             to_name="Admin",

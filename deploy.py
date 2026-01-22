@@ -106,7 +106,7 @@ def install_dependencies():
 def copy_source_code():
     """Copy source code to package directory."""
     print("📄 Copying source code...")
-    
+
     # Copy src directory
     src_dest = os.path.join(PACKAGE_DIR, "src")
     shutil.copytree(
@@ -114,7 +114,16 @@ def copy_source_code():
         src_dest,
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
     )
-    
+
+    # Copy config directory
+    config_dest = os.path.join(PACKAGE_DIR, "config")
+    shutil.copytree(
+        os.path.join(PROJECT_ROOT, "config"),
+        config_dest,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+    )
+    print("   ✅ Config directory copied")
+
     # Create lambda entry point (lambda_function.py)
     entry_point = '''"""
 Lambda entry point.
@@ -126,10 +135,10 @@ from src.handlers.router import route_request
 # Re-export the handler
 handler = route_request
 '''
-    
+
     with open(os.path.join(PACKAGE_DIR, "lambda_function.py"), "w") as f:
         f.write(entry_point)
-    
+
     print("   ✅ Source code copied")
 
 

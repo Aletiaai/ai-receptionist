@@ -8,47 +8,13 @@ import json
 import os
 from typing import Optional
 from openai import OpenAI
+
+from config.settings import OPENAI_CONFIG
+from config.prompts import SLOT_EXTRACTION_PROMPT
 from src.utils.logger import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
-
-
-# Extraction prompt template
-EXTRACTION_PROMPT = """You are a data extraction assistant. Analyze the conversation and extract user information.
-
-EXTRACTION RULES:
-
-1. **Phone Number:**
-    - Extract as 10-12 digits including country code
-    - Format: +[country code][number] (e.g., +1234567890 or +521234567890)
-    - If no country code provided, assume +1 (US)
-    - If user spells out numbers ("five five five"), convert to digits
-    - Return null if no valid phone found
-
-2. **Email:**
-    - Standard email format: word@domain.extension
-    - Must contain @ and at least one dot after @
-    - Return null if no valid email found
-
-3. **Full Name:**
-    - For English speakers: First name + Last name (e.g., "John Smith")
-    - For Spanish speakers: Can be Name(s) + Paternal surname + Maternal surname (e.g., "María García López" or "Juan Carlos Rodríguez Pérez")
-    - Capitalize properly
-    - Return null if no valid name found
-
-IMPORTANT:
-- Only extract information explicitly provided by the USER (not the assistant)
-- If information seems incomplete or unclear, return null for that field
-- Do not guess or make up information
-
-Respond ONLY with a JSON object in this exact format:
-{
-    "name": "extracted name or null",
-    "email": "extracted email or null",
-    "phone": "extracted phone or null"
-}
-"""
 
 
 class SlotExtractor:
@@ -57,15 +23,15 @@ class SlotExtractor:
     def __init__(self):
         """Initialize the slot extractor with OpenAI client."""
         logger.info("Initializing LLM-based slot extractor")
-        
+
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             logger.error("OPENAI_API_KEY not set for slot extractor")
             raise ValueError("OPENAI_API_KEY is required")
-        
+
         self.client = OpenAI(api_key=api_key)
-        self.model = os.getenv('OPENAI_EXTRACTION_MODEL', 'gpt-4.1-mini')
-        
+        self.model = OPENAI_CONFIG["extraction_model"]
+
         logger.info("Slot extractor initialized", model=self.model)
     
     def extract_all(
@@ -192,15 +158,15 @@ class SlotExtractor:
         )
         
         messages = [
-            {"role": "system", "content": EXTRACTION_PROMPT},
+            {"role": "system", "content": SLOT_EXTRACTION_PROMPT},
             {"role": "user", "content": f"Extract information from this conversation:\n\n{conversation_text}"}
         ]
-        
+
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=0,  # Deterministic extraction
-            max_tokens=200,
+            temperature=OPENAI_CONFIG["extraction_temperature"],
+            max_tokens=OPENAI_CONFIG["extraction_max_tokens"],
             response_format={"type": "json_object"}
         )
         

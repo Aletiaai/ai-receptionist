@@ -31,3 +31,5 @@ build/
 
 # OAuth tokens (sensitive)
 config/outlook_token.json
+
+CLAUDE.md

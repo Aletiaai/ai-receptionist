@@ -5,9 +5,10 @@ Orchestrates all services: tenant config, language detection, slot extraction, A
 """
 
 import json
-import os
 from typing import Any, Optional
 
+from config.settings import BOOKING_STATES, BOOKING_CONFIG, API_CONFIG
+from config.prompts import BOOKING_MESSAGES
 from src.utils.logger import get_logger
 from src.utils.language_detector import detect_language
 from src.utils.slot_extractor import get_slot_extractor
@@ -18,11 +19,12 @@ from src.services.booking_service import get_booking_service
 # Initialize logger
 logger = get_logger(__name__)
 
-# Booking flow states
-BOOKING_STATE_NONE = "none"
-BOOKING_STATE_SHOWING_SLOTS = "showing_slots"
-BOOKING_STATE_AWAITING_SELECTION = "awaiting_selection"
-BOOKING_STATE_CONFIRMED = "confirmed"
+# Booking flow states from config
+BOOKING_STATE_NONE = BOOKING_STATES["none"]
+BOOKING_STATE_AWAITING_DAY_SELECTION = BOOKING_STATES["awaiting_day_selection"]
+BOOKING_STATE_SHOWING_SLOTS = BOOKING_STATES["showing_slots"]
+BOOKING_STATE_AWAITING_SELECTION = BOOKING_STATES["awaiting_selection"]
+BOOKING_STATE_CONFIRMED = BOOKING_STATES["confirmed"]
 
 
 def lambda_handler(event: dict, context: Any) -> dict:
@@ -130,25 +132,57 @@ def process_message(
     
     # Get conversation history
     conversation_history = dynamo.get_conversation_history(session_id)
-    
+
     logger.debug(
         "Conversation history loaded",
         message_count=len(conversation_history)
     )
-    
-    # Detect language
-    detected_language = detect_language(user_message, session_id)
-    
+
     # Get current slot data and booking state
     session_metadata = dynamo.get_session_metadata(session_id)
+
+    # Detect language - use session's established language if available
+    session_language = session_metadata.get('detected_language')
+    current_message_language = detect_language(user_message, session_id)
+
+    # Persist language: once established, only change if strong evidence of switch
+    if session_language:
+        # Keep session language unless current message has strong indicators
+        # Short messages (< 3 words) shouldn't trigger language change
+        word_count = len(user_message.split())
+        if word_count < 3:
+            detected_language = session_language
+            logger.debug(
+                "Keeping session language for short message",
+                session_language=session_language,
+                word_count=word_count
+            )
+        else:
+            # For longer messages, use the detected language
+            detected_language = current_message_language
+            if detected_language != session_language:
+                logger.info(
+                    "Language changed",
+                    from_language=session_language,
+                    to_language=detected_language
+                )
+    else:
+        # First message - establish session language
+        detected_language = current_message_language
+        logger.info("Session language established", detected_language=detected_language)
     current_slots = session_metadata.get('slot_data', {})
     booking_state = session_metadata.get('booking_state', BOOKING_STATE_NONE)
     available_slots = session_metadata.get('available_slots', [])
-    
-    logger.debug(
+    available_days = session_metadata.get('available_days', [])
+    selected_date = session_metadata.get('selected_date', None)
+
+    logger.info(
         "Current session state",
         collected_fields=list(current_slots.keys()),
-        booking_state=booking_state
+        booking_state=booking_state,
+        available_days_count=len(available_days),
+        available_slots_count=len(available_slots),
+        selected_date=selected_date
     )
     
     # Save user message to history
@@ -199,21 +233,22 @@ def process_message(
         "Booking flow check",
         is_complete=slot_status['is_complete'],
         current_booking_state=booking_state,
-        should_show_slots=(slot_status['is_complete'] and booking_state == BOOKING_STATE_NONE)
+        should_show_days=(slot_status['is_complete'] and booking_state == BOOKING_STATE_NONE)
     )
-    
+
     # Handle booking flow
     booking_result = None
     booking_context = ""
-    
-    # Check if user is selecting a slot
+    lang = detected_language if detected_language in ['en', 'es'] else 'en'
+
+    # Check if user is selecting a time slot (after day selection)
     if booking_state == BOOKING_STATE_AWAITING_SELECTION and available_slots:
         booking_service = get_booking_service()
         selected_slot = booking_service.parse_slot_selection(user_message, len(available_slots))
-        
+
         if selected_slot:
             logger.info("User selected slot", slot_index=selected_slot)
-            
+
             # Book the appointment
             booking_result = booking_service.book_appointment(
                 tenant_id=tenant_id,
@@ -223,101 +258,99 @@ def process_message(
                 user_data=current_slots,
                 detected_language=detected_language
             )
-            
+
             if booking_result.get('success'):
                 booking_state = BOOKING_STATE_CONFIRMED
                 slot_info = booking_result.get('slot', {})
-                
-                if detected_language == 'es':
-                    booking_context = f"""
 
---- CITA CONFIRMADA ---
-La cita ha sido reservada exitosamente:
-- Fecha y hora: {slot_info.get('display', 'N/A')}
-- Nombre: {current_slots.get('name', 'N/A')}
-- Email: {current_slots.get('email', 'N/A')}
-- Teléfono: {current_slots.get('phone', 'N/A')}
-
-El usuario recibirá una invitación de calendario por correo electrónico.
-Por favor confirma la cita al usuario y pregunta si necesita algo más.
---- FIN ---
-"""
-                else:
-                    booking_context = f"""
-
---- APPOINTMENT CONFIRMED ---
-The appointment has been successfully booked:
-- Date and time: {slot_info.get('display', 'N/A')}
-- Name: {current_slots.get('name', 'N/A')}
-- Email: {current_slots.get('email', 'N/A')}
-- Phone: {current_slots.get('phone', 'N/A')}
-
-The user will receive a calendar invitation via email.
-Please confirm the appointment to the user and ask if they need anything else.
---- END ---
-"""
-                # Clear available slots after booking
+                booking_context = BOOKING_MESSAGES["confirmation"][lang].format(
+                    display=slot_info.get('display', 'N/A'),
+                    name=current_slots.get('name', 'N/A'),
+                    email=current_slots.get('email', 'N/A'),
+                    phone=current_slots.get('phone', 'N/A')
+                )
+                # Clear available slots/days after booking
                 available_slots = []
+                available_days = []
+                selected_date = None
             else:
                 error_msg = booking_result.get('error', 'Unknown error')
-                if detected_language == 'es':
-                    booking_context = f"\n\n[Error al reservar la cita: {error_msg}. Por favor intenta de nuevo.]\n"
+                booking_context = BOOKING_MESSAGES["booking_error"][lang].format(error=error_msg)
+
+    # Check if user is selecting a day
+    elif booking_state == BOOKING_STATE_AWAITING_DAY_SELECTION and available_days:
+        booking_service = get_booking_service()
+        selected_day_index = booking_service.parse_day_selection(user_message, len(available_days))
+
+        if selected_day_index:
+            logger.info("User selected day", day_index=selected_day_index)
+
+            # Get the selected day info
+            selected_day_info = available_days[selected_day_index - 1]
+            selected_date = selected_day_info["date"]
+
+            # Build display name for the selected day
+            if lang == "es":
+                selected_day_display = f"{selected_day_info['day_name_es']}, {selected_day_info['day_number']} de {selected_day_info['month_name_es']}"
+            else:
+                selected_day_display = f"{selected_day_info['day_name_en']}, {selected_day_info['month_name_en']} {selected_day_info['day_number']}"
+
+            # Get slots for that specific day
+            try:
+                available_slots = booking_service.get_available_slots(
+                    tenant_id=tenant_id,
+                    specific_date=selected_date,
+                    max_slots=BOOKING_CONFIG["voice_max_slots"]
+                )
+
+                if available_slots:
+                    booking_state = BOOKING_STATE_AWAITING_SELECTION
+                    formatted_slots = booking_service.format_slots_for_display(
+                        available_slots,
+                        detected_language
+                    )
+
+                    booking_context = BOOKING_MESSAGES["show_availability"][lang].format(
+                        selected_day=selected_day_display,
+                        formatted_slots=formatted_slots
+                    )
                 else:
-                    booking_context = f"\n\n[Error booking appointment: {error_msg}. Please try again.]\n"
-    
-    # If all slots collected and not yet showing availability, get available slots
+                    booking_context = BOOKING_MESSAGES["no_slots_available"][lang]
+
+            except Exception as e:
+                logger.error("Failed to get slots for day", error=str(e), exc_info=True)
+                booking_context = BOOKING_MESSAGES["no_slots_available"][lang]
+
+    # If all user info collected and not yet showing days, get available days
     if slot_status['is_complete'] and booking_state == BOOKING_STATE_NONE:
-        logger.info("All slots complete, fetching availability...")
+        logger.info("All user info complete, fetching available days...")
         try:
             booking_service = get_booking_service()
             logger.info("Booking service initialized successfully")
-            available_slots = booking_service.get_available_slots(
+            available_days = booking_service.get_available_days(
                 tenant_id=tenant_id,
-                days_ahead=7,
-                max_slots=5
+                days_ahead=BOOKING_CONFIG["days_ahead"]
             )
-            
-            if available_slots:
-                booking_state = BOOKING_STATE_AWAITING_SELECTION
-                formatted_slots = booking_service.format_slots_for_display(
-                    available_slots,
+
+            if available_days:
+                booking_state = BOOKING_STATE_AWAITING_DAY_SELECTION
+                formatted_days = booking_service.format_days_for_display(
+                    available_days,
                     detected_language
                 )
-                
-                if detected_language == 'es':
-                    booking_context = f"""
 
---- MOSTRAR DISPONIBILIDAD ---
-Toda la información del usuario ha sido recopilada. Ahora muestra los horarios disponibles.
-
-{formatted_slots}
-
-Pide al usuario que seleccione un horario usando el número (1, 2, 3, etc.)
---- FIN ---
-"""
-                else:
-                    booking_context = f"""
-
---- SHOW AVAILABILITY ---
-All user information has been collected. Now show the available time slots.
-
-{formatted_slots}
-
-Ask the user to select a time slot by number (1, 2, 3, etc.)
---- END ---
-"""
+                booking_context = BOOKING_MESSAGES["show_available_days"][lang].format(
+                    formatted_days=formatted_days
+                )
             else:
-                if detected_language == 'es':
-                    booking_context = "\n\n[No hay horarios disponibles esta semana. Disculpa al usuario y sugiere que llame directamente.]\n"
-                else:
-                    booking_context = "\n\n[No available slots this week. Apologize to the user and suggest they call directly.]\n"
-                    
+                booking_context = BOOKING_MESSAGES["no_days_available"][lang]
+
         except Exception as e:
-            logger.error("Failed to get availability", error=str(e), exc_info=True)
+            logger.error("Failed to get available days", error=str(e), exc_info=True)
             booking_context = ""
-    
-    # Update session metadata with booking state
-    _update_booking_state(dynamo, session_id, booking_state, available_slots)
+
+    # Update session metadata with booking state and language
+    _update_booking_state(dynamo, session_id, booking_state, available_slots, available_days, selected_date, detected_language)
     
     # Build enhanced system prompt with booking context
     system_prompt = tenant.get('system_prompt', '')
@@ -393,7 +426,10 @@ def _update_booking_state(
     dynamo,
     session_id: str,
     booking_state: str,
-    available_slots: list
+    available_slots: list,
+    available_days: list = None,
+    selected_date: str = None,
+    detected_language: str = None
 ) -> None:
     """
     Update the booking state in session metadata.
@@ -402,16 +438,23 @@ def _update_booking_state(
         session_id: Session ID
         booking_state: Current booking state
         available_slots: List of available slots (if showing)
+        available_days: List of available days (for day selection step)
+        selected_date: The selected date (ISO format YYYY-MM-DD)
+        detected_language: The detected/established session language
     """
     # Get current metadata
     history = dynamo.get_conversation_history(session_id, limit=1)
-    
+
     if history:
         first_msg = history[0]
         metadata = first_msg.get('metadata', {})
         metadata['booking_state'] = booking_state
         metadata['available_slots'] = available_slots
-        
+        metadata['available_days'] = available_days if available_days is not None else []
+        metadata['selected_date'] = selected_date
+        if detected_language:
+            metadata['detected_language'] = detected_language
+
         dynamo.conversations_table.update_item(
             Key={
                 'session_id': session_id,
@@ -460,14 +503,12 @@ def _success_response(data: dict) -> dict:
     Returns:
         API Gateway response format
     """
+    headers = {'Content-Type': 'application/json'}
+    headers.update(API_CONFIG["cors_headers"])
+
     return {
         'statusCode': 200,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-            'Access-Control-Allow-Methods': 'POST,OPTIONS'
-        },
+        'headers': headers,
         'body': json.dumps(data)
     }
 
@@ -486,15 +527,13 @@ def _error_response(status_code: int, error_message: str) -> dict:
         status_code=status_code,
         error_detail=error_message
     )
-    
+
+    headers = {'Content-Type': 'application/json'}
+    headers.update(API_CONFIG["cors_headers"])
+
     return {
         'statusCode': status_code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-            'Access-Control-Allow-Methods': 'POST,OPTIONS'
-        },
+        'headers': headers,
         'body': json.dumps({
             'error': error_message,
             'status_code': status_code

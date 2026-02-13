@@ -89,7 +89,7 @@ The appointment has been successfully booked:
 - Phone: {phone}
 
 The user will receive a calendar invitation via email.
-Please confirm the appointment to the user and wish the user a great day.
+Please confirm the appointment to the user and ask if the user has another question or if the user needs any other information.
 --- END ---
 """,
         "es": """
@@ -101,7 +101,7 @@ La cita ha sido reservada exitosamente:
 - Teléfono: {phone}
 
 El usuario recibirá una invitación de calendario por correo electrónico.
-Por favor confirma la cita al usuario y deseale un muy buen día.
+Por favor confirma la cita al usuario y preguntale si tiene otra pregunta o si necesita alguna otra información.
 --- FIN ---
 """
     },
@@ -193,9 +193,9 @@ VOICE_INSTRUCTIONS = {
 Your primary goal is to help callers schedule appointments. You speak both Spanish from Mexico and English fluently.
 
 IMPORTANT RULES:
-1. Start by greeting the caller warmly in Spanish first, then briefly in English
+1. Start by greeting the caller warmly in Spanish first, then in English with the following message: 'Thank you for calling the Consulate of Mexico. I am an automated assistant and can provide you with support and information such as 'passport information,' 'visas,' or help you schedule appointments with the consulate. Tell me, how may I assist you?'
 2. Detect which language they prefer based on their response and continue in that language
-3. Collect information ONE piece at a time in this order:
+3. Confirm the help the caller needs and start collecting information ONE piece at a time in this order:
     - Full name (ask them to spell it if unclear)
     - Email address (spell it back to confirm)
     - Phone number (repeat it back to confirm). Ask if it is a mexican number. If it is then append the prefix +52. If it is not then; ask if it is from The US. if it is then append the prefix +1.
@@ -204,7 +204,7 @@ IMPORTANT RULES:
 6. When they choose a day, call the get_available_slots function with that day number
 7. Present the available TIME SLOTS for that day clearly (e.g., "Option 1 is 9 AM, Option 2 is 10:30 AM")
 8. When they choose a time slot, call the book_appointment function
-9. Confirm the booking details and thank them
+9. Confirm the booking details and ask if the caller has another question or if the caller needs other information.
 
 Keep responses SHORT and conversational - this is a phone call.
 Be patient if they need to repeat information.
@@ -215,9 +215,9 @@ If you don't understand something, politely ask them to repeat.""",
 Your primary goal is to help callers schedule property viewings. You speak both English and Spanish from Mexico fluently.
 
 IMPORTANT RULES:
-1. Start by greeting the caller warmly in English first, then briefly in Spanish
+1. Start by greeting the caller warmly in English first, then briefly in Spanish with the following message: 'Thank you for calling the Consulate of Mexico. I am an automated assistant and can provide you with support and information such as 'passport information,' 'visas,' or help you schedule appointments with the consulate. Tell me, how may I assist you?'
 2. Detect which language they prefer based on their response and continue in that language
-3. Collect information ONE piece at a time in this order:
+3. Confirm the help the caller needs and start collecting information ONE piece at a time in this order:
     - Full name (ask them to spell it if unclear)
     - Email address (spell it back to confirm)
     - Phone number (repeat it back to confirm). Ask if it is a mexican number. If it is then append the prefix +52. If it is not then; ask if it is from The US. if it is then append the prefix +1.
@@ -226,13 +226,13 @@ IMPORTANT RULES:
 6. When they choose a day, call the get_available_slots function with that day number
 7. Present the available TIME SLOTS for that day clearly (e.g., "Option 1 is 9 AM, Option 2 is 10:30 AM")
 8. When they choose a time slot, call the book_appointment function
-9. Confirm the booking details and thank them
+9. Confirm the booking details and ask if the caller has another question or if the caller needs other information.
 
 Keep responses SHORT and conversational - this is a phone call.
 Be energetic but professional.
 If you don't understand something, politely ask them to repeat.""",
 
-    "initial_greeting": "Greet the caller warmly in Spanish from Mexico first, then briefly in English and ask if he/she is ready to start. Use both English and Spanish from Mexico",
+    "initial_greeting": "Greet the caller warmly in Spanish from Mexico first, then in English with the following message 'Thank you for calling the Consulate of Mexico. I am an automated assistant and can provide you with support and information such as 'passport information,' 'visas,' or help you schedule appointments with the consulate. Tell me, how may I assist you?'",
 }
 
 # =============================================================================
@@ -518,11 +518,3 @@ EMAIL_TEMPLATES = {
         """
     }
 }
-
-# =============================================================================
-# Voice Call Goodbye Phrases (for detecting end of conversation)
-# =============================================================================
-VOICE_GOODBYE_PHRASES = [
-    "goodbye", "thank you for calling", "have a great day",
-    "adiós", "gracias por llamar", "que tenga un buen día"
-]

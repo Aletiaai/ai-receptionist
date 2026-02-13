@@ -35,7 +35,7 @@ from config.settings import (
     OPENAI_CONFIG, VOICE_CONFIG, LOGGING_CONFIG,
     DEFAULT_VOICE_TENANTS, BOOKING_CONFIG
 )
-from config.prompts import VOICE_INSTRUCTIONS, VOICE_ERROR_MESSAGES, VOICE_GOODBYE_PHRASES
+from config.prompts import VOICE_INSTRUCTIONS, VOICE_ERROR_MESSAGES
 
 # Configure logging with call_id filter on root logger
 class CallContextFilter(logging.Filter):
@@ -467,19 +467,56 @@ async def monitor_call(call_id: str, tenant_id: str):
 
                     event_type = event.get("type")
 
-                    # Debug: Log all events after booking is complete
+                    # Get current call state
                     call_state = active_calls.get(call_id, {})
+
+                    # Debug: Log all events after booking is complete
                     if call_state.get("booking_complete"):
-                        logger.info(f"[POST-BOOKING EVENT] {event_type}", extra=log_extra)
+                        logger.info(f"[POST-BOOKING] Event: {event_type}", extra=log_extra)
 
                     # Log transcriptions
                     if event_type == "conversation.item.input_audio_transcription.completed":
                         transcript = event.get("transcript", "")
                         logger.info(f"User said: {transcript[:100]}{'...' if len(transcript) > 100 else ''}", extra=log_extra)
 
-                    elif event_type == "response.audio_transcript.done":
+                    elif event_type == "response.output_audio_transcript.done":
+                        # This fires when transcript is complete (but audio may still be playing!)
                         transcript = event.get("transcript", "")
                         logger.info(f"Assistant said: {transcript[:100]}{'...' if len(transcript) > 100 else ''}", extra=log_extra)
+
+                    # Audio buffer stopped = audio actually finished playing to caller
+                    elif event_type == "output_audio_buffer.stopped":
+                        logger.info("Audio playback finished (output_audio_buffer.stopped)", extra=log_extra)
+                        if call_state.get("booking_complete"):
+                            # Cancel any existing timer first
+                            hangup_task = call_state.get("hangup_task")
+                            if hangup_task and not hangup_task.done():
+                                hangup_task.cancel()
+
+                            # Start silence timer (3 seconds of silence = hang up)
+                            logger.info("AI audio finished playing, starting silence timer", extra=log_extra)
+                            hangup_task = asyncio.create_task(
+                                silence_hangup(call_id, silence_seconds=3)
+                            )
+                            call_state["hangup_task"] = hangup_task
+                            active_calls[call_id] = call_state
+
+                    # Track when user starts speaking - cancel any pending hangup
+                    elif event_type == "input_audio_buffer.speech_started":
+                        logger.debug(f"Event: input_audio_buffer.speech_started (booking_complete={call_state.get('booking_complete')})", extra=log_extra)
+                        if call_state.get("booking_complete"):
+                            # User is speaking after booking - cancel pending hangup
+                            hangup_task = call_state.get("hangup_task")
+                            if hangup_task and not hangup_task.done():
+                                hangup_task.cancel()
+                                logger.info("User speaking, cancelled pending hangup", extra=log_extra)
+                            call_state["hangup_task"] = None
+                            active_calls[call_id] = call_state
+
+                    # Track when AI finishes generating a response (note: audio may still be playing)
+                    elif event_type == "response.done":
+                        logger.info(f"Event: response.done (booking_complete={call_state.get('booking_complete')}) - response generated, audio still playing", extra=log_extra)
+                        # Don't start timer here - wait for response.audio_transcript.done instead
 
                     elif event_type == "response.function_call_arguments.done":
                         # Handle function calls with error handling
@@ -738,12 +775,12 @@ async def handle_function_call(ws, call_id: str, event: dict):
 
                 logger.info(f"Booking result: {result.get('success', False)}", extra=log_extra)
 
-                # If booking successful, schedule delayed hangup
+                # If booking successful, mark for silence-based hangup
                 if result.get("success"):
                     call_state["booking_complete"] = True
+                    call_state["hangup_task"] = None  # Will be set when AI finishes speaking
                     active_calls[call_id] = call_state
-                    # Schedule hangup after AI has time to speak confirmation
-                    asyncio.create_task(delayed_hangup(call_id, delay_seconds=12))
+                    logger.info("Booking complete, will hang up after AI finishes and silence detected", extra=log_extra)
 
     else:
         logger.warning(f"Unknown function: {function_name}", extra=log_extra)
@@ -1039,19 +1076,28 @@ async def book_appointment_via_api(tenant_id: str, user_data: dict, slot_number:
         }
 
 
-async def delayed_hangup(call_id: str, delay_seconds: int = 12):
-    """Wait for AI to finish speaking, then hang up the call."""
+async def silence_hangup(call_id: str, silence_seconds: int = 3):
+    """Wait for silence period, then hang up the call.
+
+    This task is started when AI finishes speaking after booking.
+    It gets cancelled if user starts speaking, and restarted when AI finishes again.
+    """
     log_extra = {'call_id': call_id}
-    logger.info(f"Scheduled hangup in {delay_seconds} seconds", extra=log_extra)
+    logger.info(f"Silence timer started ({silence_seconds}s)", extra=log_extra)
 
-    await asyncio.sleep(delay_seconds)
+    try:
+        await asyncio.sleep(silence_seconds)
 
-    # Check if call is still active before hanging up
-    if call_id in active_calls:
-        logger.info("Delay complete, hanging up call", extra=log_extra)
-        await hangup_call(call_id)
-    else:
-        logger.info("Call already ended, skipping hangup", extra=log_extra)
+        # Check if call is still active before hanging up
+        if call_id in active_calls:
+            logger.info("Silence detected, hanging up call", extra=log_extra)
+            await hangup_call(call_id)
+        else:
+            logger.info("Call already ended, skipping hangup", extra=log_extra)
+
+    except asyncio.CancelledError:
+        logger.info("Silence timer cancelled (user spoke)", extra=log_extra)
+        raise  # Re-raise to properly handle cancellation
 
 
 async def hangup_call(call_id: str):

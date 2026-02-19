@@ -1,6 +1,9 @@
 # AI Receptionist
 
-A multi-tenant conversational AI system for scheduling appointments via **text chat** and **voice calls**. Supports bilingual conversations (English/Spanish) with automatic language detection.
+A production-ready, **multi-agent** AI system that schedules appointments through natural conversation **via text chat or phone call** in English and Spanish.
+Built with Python and **deployed on AWS** (Lambda, Fargate, DynamoDB), this system integrates OpenAI's Realtime API for voice, Microsoft Azure AD and Outlook Calendar for availability and booking, and SendGrid for email confirmations. It supports multiple business tenants from a single deployment, making it reusable and scalable across different use cases.
+
+Designed and built as a freelance project demonstrating end-to-end GenAI application development: from architecture and prompt engineering to cloud deployment and real-world integrations.
 
 ## Features
 
